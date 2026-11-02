@@ -2,7 +2,7 @@
 
 A twin-stick neon roguelite in the style of Geometry Wars. Pick one of seven very different ships, draft upgrades and mods that combine into powerful synergies, and blast through three sectors and their bosses, or survive Endless in one huge arena. Relaxed difficulty and auto-fire make it easy to pick up.
 
-This repo is one game, published through **PushPlay**: every push builds the game and publishes it, and the PushPlay launcher on a handheld (Steam Deck or Legion Go) or PC picks it up — from the owner's library, and from PushPlay's **Discover** tab for everyone else. It is played **on a handheld, with a controller, on the couch**, and sometimes on a PC with a keyboard, a mouse or a touchscreen. Design for that.
+This repo is one game, published through **PushPlay**: releases are published from here to a public release repo, and the PushPlay launcher on a handheld (Steam Deck or Legion Go) or PC picks it up — from the owner's library, and from PushPlay's **Discover** tab for everyone else. It is played **on a handheld, with a controller, on the couch**, and sometimes on a PC with a keyboard, a mouse or a touchscreen. Design for that.
 
 The game is the repo root: `pushplay.json`, `index.html`, `game.js` and friends, and `art/`. Its design brief is [`DESIGN.md`](DESIGN.md).
 
@@ -13,9 +13,17 @@ The game is the repo root: `pushplay.json`, `index.html`, `game.js` and friends,
 3. **Run `npm run check` and fix everything it reports.** It builds the game, plays it headlessly at 1280×800 with a virtual gamepad, then keyboard-only, then touch, checks that Start pauses, renders it in a 16:9 window at DPR 2, and renders the art to PNG.
 4. **Look at the images it prints** (`.github/pushplay/.work/out/neon-swarm/__art/cover.png`, `hero.png`, `screenshot.png`) and iterate until they look right.
 5. **Verify by hand** against the matrix in *Verification*.
-6. Bump `version` in `pushplay.json` (patch: fixes and tuning, minor: features and content), add a Changelog line to `DESIGN.md`, commit and push. Pushing `main` publishes the build; other branches only run the check.
+6. Bump `version` in `pushplay.json` (patch: fixes and tuning, minor: features and content), add a Changelog line to `DESIGN.md`, commit and push. Pushes only check the game; players get it when you run the release (see *Releasing*).
 
 First time in a fresh checkout: `npm run setup` (installs dependencies and the headless browser).
+
+## Releasing
+
+The code lives in this **private** repo; players get the game from the **public** release repo [`Visual-Zone-Development/neon-swarm`](https://github.com/Visual-Zone-Development/neon-swarm), which PushPlay's Discover tab lists.
+
+- **Pushes** run the check (and update this repo's own private build), but never reach players.
+- **To release:** bump `version` in `pushplay.json`, add a Changelog line to `DESIGN.md`, push, then **Actions → Release to PushPlay → Run workflow**. It builds and checks the game and, only if that passes, publishes it to `Visual-Zone-Development/neon-swarm`'s `pushplay-latest` release. Or from a terminal: `gh workflow run release.yml`.
+- It needs the `RELEASE_TOKEN` secret (a fine-grained token with *Contents: read and write* on `Visual-Zone-Development/neon-swarm`). Never commit code or files to the release repo by hand: it only holds a README and the release.
 
 ## Game rules
 
