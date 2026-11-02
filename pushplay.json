@@ -3,7 +3,7 @@
   "id": "neon-swarm",
   "name": "Neon Swarm",
   "description": "A twin-stick neon roguelite in the style of Geometry Wars. Pick one of seven very different ships, draft upgrades and mods that combine into powerful synergies, and blast through three sectors and their bosses, or survive Endless in one huge arena. Relaxed difficulty and auto-fire make it easy to pick up.",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "entry": {
     "web": "index.html"
   },
