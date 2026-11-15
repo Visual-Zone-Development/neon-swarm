@@ -4305,6 +4305,8 @@ function frame(now) {
 requestAnimationFrame(frame)
 
 window.__game = {
+  // Where the on-screen pause button is, so the check can click it when playing with only a mouse.
+  pauseButton: PAUSE_BTN,
   state,
   TUNING,
   save: saveStore,
