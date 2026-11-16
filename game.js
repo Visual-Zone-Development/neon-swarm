@@ -1,6 +1,6 @@
 // Neon Swarm: twin-stick neon arena roguelite. Clear waves, draft upgrades, beat three bosses.
 import { input } from './input.js'
-import { createMenu } from './menu.js'
+import { createMenu, QUIT_TO_LIBRARY } from './menu.js'
 import { fitCanvas } from './fit.js'
 import { createAudio } from './audio.js'
 import { createSave, createSettings } from './save.js'
@@ -697,6 +697,10 @@ const menuFont = (px = 28) => `700 ${Math.round(px * cfg.textScale)}px ${FONT}`
 const PAUSE_BTN = { x: W / 2 - 28, y: H - 76, w: 56, h: 56 }
 const BOMB_BTN = { x: W - 48 - 150, y: H - 84, w: 150, h: 56 }
 const ABILITY_BTN = { x: W - 48 - 220, y: H - 168, w: 220, h: 56 }
+// Endless: opens a banked upgrade. Top centre under the XP bar, away from the thumbs and the other buttons.
+const UPGRADE_BTN = { x: W / 2 - 120, y: 98, w: 240, h: 50 }
+// Pause in the draft: the end of the PICK / REROLL / BANISH row (the play pause button would overlap REROLL).
+const DRAFT_PAUSE_BTN = { x: W / 2 + 498, y: 684, w: 52, h: 52 }
 const TITLE_ARROW = { left: { x: 940 - 230, y: 370, w: 80, h: 80 }, right: { x: 940 + 150, y: 370, w: 80, h: 80 } }
 const inside = (p, r) => p && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h
 /** A pointer click or tap that ended inside r this frame. */
@@ -707,18 +711,55 @@ function ptrDown(r) {
   for (const p of input.pointers.values()) if (p.down && inside(p, r)) return true
   return false
 }
-/** A finger or the mouse button that went down inside r this frame. */
-const downLast = new Set()
-function pressedIn(r) {
-  if (input.pointer.pressed && inside(input.pointer, r)) return true
-  for (const p of input.pointers.values()) if (p.down && !downLast.has(p.id) && inside(p, r)) return true
-  return false
+// Every finger's presses and releases, in game coordinates. input.pointer only follows the first
+// finger, so a second finger tapping a button while the first one steers needs these.
+const fingerQueue = { down: [], up: [] }
+const fingers = { down: [], up: [] }
+function toGamePoint(e) {
+  const r = canvas.getBoundingClientRect()
+  return { id: e.pointerId, x: ((e.clientX - r.left) / (r.width || 1)) * W, y: ((e.clientY - r.top) / (r.height || 1)) * H, primary: e.isPrimary !== false }
 }
-function rememberPointers() {
-  downLast.clear()
-  for (const p of input.pointers.values()) if (p.down) downLast.add(p.id)
+addEventListener('pointerdown', (e) => e.button !== 2 && fingerQueue.down.push(toGamePoint(e)))
+addEventListener('pointerup', (e) => e.button !== 2 && fingerQueue.up.push(toGamePoint(e)))
+/** Once per frame, before update(): this frame's presses and releases. */
+function takeFingers() {
+  fingers.down = fingerQueue.down.splice(0)
+  fingers.up = fingerQueue.up.splice(0)
+}
+/** Any finger or the mouse button went down inside r this frame. */
+const pressedIn = (r) => fingers.down.some((p) => inside(p, r))
+// Fingers that went down on the current screen. A thumb that was steering when the pause menu or
+// the game over screen opened must not choose whatever item it lifts off over.
+const screenDowns = new Set()
+let fingerScreen = ''
+function trackFingers() {
+  if (screen !== fingerScreen) {
+    fingerScreen = screen
+    screenDowns.clear()
+  }
+  for (const p of fingers.down) screenDowns.add(p.id)
+}
+/** A kit menu that answers only taps that started on its screen, from any finger (the kit's menus only hear the first). */
+function menuChoice(menu, dt) {
+  const first = fingers.up.find((p) => p.primary)
+  if (input.pointer.released && !(first && screenDowns.has(first.id))) input.pointer.released = false
+  const choice = menu.update(input, dt)
+  if (choice) return choice
+  const p = fingers.up.find((f) => !f.primary && screenDowns.has(f.id))
+  if (!p) return null
+  const i = menu.items.findIndex((it, k) => !it.disabled && !it.type && inside(p, menu.rect(k)))
+  if (i < 0) return null
+  const id = menu.items[i].id
+  menu.select(id)
+  if (id !== QUIT_TO_LIBRARY) return id
+  globalThis.pushplay?.quit?.()
+  return null
 }
 const touchy = () => input.mode === 'touch' || input.mode === 'mouse'
+/** Text for touch players (what's actually on their screen), or the usual text for everyone else. */
+const touchText = (touchStr, otherStr) => (input.mode === 'touch' ? touchStr : otherStr)
+/** Endless: the UPGRADE button is on screen (mouse and touch, with an upgrade banked). */
+const upgradeShown = () => touchy() && screen === 'playing' && !!G?.endless && G.pending > 0 && G.P.alive
 /** Draw a tappable panel button; returns true when it was clicked or tapped. */
 function button(r, label, color = '#ffffff', hot = false) {
   const hover = input.mode === 'mouse' && inside(input.pointer, r)
@@ -1302,7 +1343,7 @@ function updateEndless(dt) {
     const n = Math.min(1 + Math.floor(G.tier / 2), E.eliteMax - alive)
     for (let i = 0; i < n; i++) spawnElite(pick(kinds))
   }
-  // Level up from geoms. Upgrades bank up; the player opens the draft with Y when it's safe.
+  // Level up from geoms. Upgrades bank up; the player opens the draft with Y (or the UPGRADE button) when it's safe.
   if (G.xp >= G.xpNext) {
     G.xp -= G.xpNext
     G.level++
@@ -1312,7 +1353,7 @@ function updateEndless(dt) {
     popup(G.P.x, G.P.y - 40, 'UPGRADE READY', '#d8ff3a', 28)
     ring(G.P.x, G.P.y, 140, '#d8ff3a', 0.5, 4)
   }
-  if (G.pending > 0 && G.P.alive && input.pressed('y')) {
+  if (G.pending > 0 && G.P.alive && (input.pressed('y') || (upgradeShown() && pressedIn(UPGRADE_BTN)))) {
     G.pending--
     G.drafted++
     openDraft()
@@ -2539,7 +2580,7 @@ function readControls() {
   if (input.held('aimRight')) ax += 1
   if (input.held('aimUp')) ay -= 1
   if (input.held('aimDown')) ay += 1
-  const onButton = (p) => inside(p, PAUSE_BTN) || inside(p, BOMB_BTN) || inside(p, ABILITY_BTN)
+  const onButton = (p) => inside(p, PAUSE_BTN) || inside(p, BOMB_BTN) || inside(p, ABILITY_BTN) || (upgradeShown() && inside(p, UPGRADE_BTN))
   if (input.mode === 'mouse' && input.pointer.active && input.pointer.down && !onButton(input.pointer)) {
     ax = input.pointer.x - (P.x - cam.x)
     ay = input.pointer.y - (P.y - cam.y)
@@ -3108,7 +3149,7 @@ function openDraft(supply = false) {
   if (supply) G.rareNext = true
   const cards = drawCards(3)
   G.rareNext = false
-  G.draft = { cards, sel: 1, t: 0, supply }
+  G.draft = { cards, sel: 1, t: 0, supply, downs: new Set() }
   screen = 'draft'
   menuLock = 0.45
   sfx.levelUp()
@@ -3170,41 +3211,49 @@ const DRAFT_BTN = { pick: { x: W / 2 - 474, y: 684, w: 300, h: 52 }, reroll: { x
 function updateDraft(dt) {
   const d = G.draft
   d.t += dt
-  if (input.pressed('menu')) return openPause()
+  if (input.pressed('menu') || (touchy() && pressedIn(DRAFT_PAUSE_BTN))) return openPause()
   const nx = navX()
   if (nx && d.cards.length) {
     d.sel = clamp(d.sel + nx, 0, d.cards.length - 1)
     sfx.move()
   }
   // Mouse hover or a tap selects a card; a click, or a second tap on the selected card, picks it.
+  // Any finger counts (a thumb that was steering when the draft opened may still be down), but only
+  // taps that started in the draft: lifting that steering thumb over a card doesn't choose it.
+  for (const p of fingers.down) d.downs.add(p.id)
+  const ups = fingers.up.filter((p) => d.downs.delete(p.id))
+  const tapIn = (r) => ups.some((p) => inside(p, r))
   let pickPointer = false
-  if (input.pointer.active && d.cards.length) {
-    const over = d.cards.findIndex((_, i) => inside(input.pointer, draftCardRect(i, d.cards.length, i === d.sel)))
-    if (over >= 0 && input.mode === 'mouse' && over !== d.sel) {
+  const cardAt = (p) => d.cards.findIndex((_, i) => inside(p, draftCardRect(i, d.cards.length, i === d.sel)))
+  if (input.pointer.active && d.cards.length && input.mode === 'mouse') {
+    const over = cardAt(input.pointer)
+    if (over >= 0 && over !== d.sel) {
       d.sel = over
       sfx.move()
     }
-    if (over >= 0 && input.pointer.released) {
-      if (over === d.sel) pickPointer = true
-      else {
-        d.sel = over
-        sfx.move()
-      }
+  }
+  const up = d.cards.length ? ups.find((p) => cardAt(p) >= 0) : null
+  if (up) {
+    const over = cardAt(up)
+    if (over === d.sel) pickPointer = true
+    else {
+      d.sel = over
+      sfx.move()
     }
   }
   if (menuLock > 0) return
-  if ((input.pressed('a') || pickPointer || tapped(DRAFT_BTN.pick)) && d.cards.length) {
+  if ((input.pressed('a') || pickPointer || tapIn(DRAFT_BTN.pick)) && d.cards.length) {
     applyCard(d.cards[d.sel])
     sfx.select()
     afterDraft()
-  } else if (input.pressed('y') || tapped(DRAFT_BTN.reroll)) {
+  } else if (input.pressed('y') || tapIn(DRAFT_BTN.reroll)) {
     if (G.rerolls > 0) {
       G.rerolls--
       d.cards = drawCards(3)
       d.sel = clamp(d.sel, 0, Math.max(0, d.cards.length - 1))
       sfx.buy()
     } else sfx.deny()
-  } else if (input.pressed('x') || tapped(DRAFT_BTN.banish)) {
+  } else if (input.pressed('x') || tapIn(DRAFT_BTN.banish)) {
     if (G.banishes > 0 && d.cards.length) {
       G.banishes--
       const c = d.cards[d.sel]
@@ -3215,7 +3264,7 @@ function updateDraft(dt) {
       d.sel = clamp(d.sel, 0, Math.max(0, d.cards.length - 1))
       sfx.explode(false)
     } else sfx.deny()
-  } else if (!d.cards.length && (input.pressed('b') || tapped(DRAFT_BTN.pick))) afterDraft()
+  } else if (!d.cards.length && (input.pressed('b') || tapIn(DRAFT_BTN.pick))) afterDraft()
 }
 function afterDraft() {
   const wasSupply = G.draft?.supply
@@ -3355,6 +3404,11 @@ const ASSIST_DESC = [
   'Your aim snaps onto the enemy you are pointing toward.',
   'Your ship aims and fires at the nearest enemy by itself. The right stick still takes over.'
 ]
+const ASSIST_DESC_TOUCH = [
+  'You aim and fire by dragging your right thumb.',
+  'Your aim snaps onto the enemy you are pointing toward.',
+  'Your ship aims and fires at the nearest enemy by itself. Your right thumb still takes over.'
+]
 // The runtime's settings screen (volumes, reduced shake & flash, text size) plus the game's own rows.
 const settingsScreen = createSettingsScreen({
   settings,
@@ -3362,19 +3416,68 @@ const settingsScreen = createSettingsScreen({
   y: 120,
   extra: [
     { id: 'diff', label: 'Difficulty', type: 'choice', value: cfg.diff, options: TUNING.difficulty.map((d, i) => ({ value: i, label: d.name })) },
-    { id: 'assist', label: 'Aiming', type: 'choice', value: cfg.assist, options: ASSIST_NAMES.map((n, i) => ({ value: i, label: n })) },
+    { id: 'assist', label: 'Aiming', type: 'choice', value: cfg.assist, options: ASSIST_NAMES.map((n, i) => ({ value: i, label: n })), onChange: () => (cfg.assistChosen = true) },
     { id: 'rumble', label: 'Rumble', type: 'toggle', value: cfg.rumble, onChange: (v) => v && rumble(0.6, 0.4, 200) }
   ]
 })
 const SETTINGS_DESC = {
   diff: () => TUNING.difficulty[cfg.diff].desc + (G ? '  Applies from your next run.' : ''),
-  assist: () => ASSIST_DESC[cfg.assist],
+  assist: () => touchText(ASSIST_DESC_TOUCH[cfg.assist], ASSIST_DESC[cfg.assist]),
   rumble: () => 'Controller vibration on hits, bombs and boss kills.',
   reducedShake: () => 'Skips screen shake and the white flashes from bombs and hits.'
 }
 
+// ---------- touch ----------
+// Tablets and phones start in touch mode, so the on-screen buttons and touch text are there before
+// the first tap (input.js starts in keyboard mode until a finger lands). A controller wins.
+function coarsePointer() {
+  try {
+    return matchMedia('(pointer: coarse)').matches
+  } catch {
+    return false
+  }
+}
+const padConnected = () => [...(navigator.getGamepads?.() ?? [])].some((p) => p && p.connected !== false)
+if (input.mode !== 'gamepad' && coarsePointer() && !padConnected()) input.mode = 'touch'
+// New touch players get auto-fire, so one thumb moves and the ship shoots. Never over a choice made
+// in Settings (cfg.assistChosen), and only from Off: aim assist or auto-fire already set stay as they are.
+let touchSeen = false
+function watchTouch() {
+  if (touchSeen || input.mode !== 'touch') return
+  touchSeen = true
+  if (cfg.assistChosen || cfg.assist !== 0) return
+  cfg.assist = 2
+  const item = settingsScreen.menu.items.find((it) => it.id === 'assist')
+  if (item) item.value = 2
+  settings.save()
+}
+watchTouch()
+/** A touch screen held upright: the game is drawn for landscape, so it asks to be turned. */
+const portrait = () => input.mode === 'touch' && innerHeight > innerWidth
+function drawTurnSideways() {
+  screenT()
+  ctx.globalAlpha = 1
+  ctx.fillStyle = '#000006'
+  ctx.fillRect(0, 0, W, H)
+  // A tablet outline turning on its side.
+  const a = -Math.PI / 2 * clamp((Math.sin(clock * 2) + 1) / 2 * 1.4 - 0.2, 0, 1)
+  ctx.save()
+  ctx.translate(W / 2, 300)
+  ctx.rotate(a)
+  ctx.strokeStyle = '#3fd8ff'
+  ctx.lineWidth = 6
+  ctx.beginPath()
+  ctx.roundRect(-60, -90, 120, 180, 14)
+  ctx.stroke()
+  ctx.restore()
+  glowText('TURN YOUR TABLET SIDEWAYS', W / 2, 500, 52, '#ff5ce1')
+  text(G && screen === 'paused' ? 'The game is paused.' : 'Neon Swarm plays in landscape.', W / 2, 560, 30, '#eef0f5', 'center', 600)
+}
+
 // ---------- main update ----------
 function update(dt) {
+  watchTouch()
+  trackFingers()
   setArrowsAim(screen === 'playing')
   // The cursor is a crosshair during play with a mouse; every menu shows the real one.
   canvas.style.cursor = screen === 'playing' && input.mode === 'mouse' ? 'none' : 'default'
@@ -3386,7 +3489,8 @@ function update(dt) {
       updateTitle(dt)
       break
     case 'playing':
-      if (input.pointer.pressed && inside(input.pointer, PAUSE_BTN)) input.requestMenu()
+      // Any finger: the other thumb is usually steering.
+      if (touchy() && pressedIn(PAUSE_BTN)) input.requestMenu()
       if (input.pressed('menu') && G.P.alive) {
         openPause()
         break
@@ -3394,7 +3498,7 @@ function update(dt) {
       updatePlay(dt)
       break
     case 'paused': {
-      const choice = pauseMenu.update(input, dt)
+      const choice = menuChoice(pauseMenu, dt)
       if (choice === 'resume' || choice === 'back') {
         screen = pauseFrom
         sfx.select()
@@ -3415,7 +3519,7 @@ function update(dt) {
       break
     case 'gameover': {
       if (menuLock > 0) break
-      const choice = overMenu.update(input, dt)
+      const choice = menuChoice(overMenu, dt)
       if (choice === 'again') {
         // One-press retry with the same ship and mode.
         sfx.select()
@@ -3444,7 +3548,7 @@ function update(dt) {
   }
   grid.update(dt)
   updateFx(screen === 'playing' && G?.slowT > 0 ? dt * 0.35 : dt)
-  rememberPointers()
+  for (const p of fingers.up) screenDowns.delete(p.id)
 }
 
 // ---------- drawing ----------
@@ -3887,7 +3991,10 @@ function drawHud() {
     ctx.lineWidth = 1.5
     ctx.strokeRect(x, 76, bw, 10)
     text(`LV ${G.level}`, x - 14, 88, 24, '#d8ff3a', 'right')
-    if (G.pending > 0) {
+    if (upgradeShown()) {
+      // Mouse and touch: a button under the bar (tap it when it's safe).
+      button(UPGRADE_BTN, `UPGRADE ×${G.pending}`, '#d8ff3a')
+    } else if (G.pending > 0 && !touchy()) {
       ctx.globalAlpha = 0.7 + Math.sin(clock * 6) * 0.3
       text(`${input.label('y')}  UPGRADE${G.pending > 1 ? ` ×${G.pending}` : ''}`, x + bw + 14, 88, 24, '#d8ff3a', 'left')
       ctx.globalAlpha = 1
@@ -3951,10 +4058,7 @@ function drawHud() {
   drawAbilityHud()
   if (screen === 'playing') {
     // Pause button (mouse and touch), bottom centre.
-    panel(PAUSE_BTN.x, PAUSE_BTN.y, PAUSE_BTN.w, PAUSE_BTN.h, input.mode === 'mouse' && inside(input.pointer, PAUSE_BTN) ? '#ffffff' : '#55607a', 'rgba(8,10,22,0.7)', 2)
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(PAUSE_BTN.x + 18, PAUSE_BTN.y + 16, 7, 24)
-    ctx.fillRect(PAUSE_BTN.x + 31, PAUSE_BTN.y + 16, 7, 24)
+    drawPauseButton(PAUSE_BTN)
     if (input.mode === 'mouse' && input.pointer.active) drawCrosshair()
   }
   // Active synergies (top left, under the multiplier).
@@ -3966,11 +4070,22 @@ function drawHud() {
   }
   const n = G.synNote
   if (n && screen === 'playing') {
+    const ny = upgradeShown() ? 30 : 0 // clear of the UPGRADE button
     ctx.globalAlpha = Math.min(1, n.t)
-    text(n.text, W / 2, 168, 30, n.color)
-    text(n.sub, W / 2, 202, 24, '#ffffff', 'center', 600)
+    text(n.text, W / 2, 168 + ny, 30, n.color)
+    text(n.sub, W / 2, 202 + ny, 24, '#ffffff', 'center', 600)
     ctx.globalAlpha = 1
   }
+}
+
+/** The two-bar pause button (mouse and touch). */
+function drawPauseButton(r) {
+  panel(r.x, r.y, r.w, r.h, input.mode === 'mouse' && inside(input.pointer, r) ? '#ffffff' : '#55607a', 'rgba(8,10,22,0.7)', 2)
+  ctx.fillStyle = '#ffffff'
+  const cx = r.x + r.w / 2
+  const cy = r.y + r.h / 2
+  ctx.fillRect(cx - 10, cy - 12, 7, 24)
+  ctx.fillRect(cx + 3, cy - 12, 7, 24)
 }
 
 /** Ability button, name and cooldown bar (bottom right, above the bomb prompt). */
@@ -4104,7 +4219,10 @@ function drawDraft() {
   button(DRAFT_BTN.pick, n ? 'PICK' : 'CONTINUE', sector().accent)
   button(DRAFT_BTN.reroll, `REROLL (${G.rerolls})`, G.rerolls ? '#d8ff3a' : '#55607a')
   button(DRAFT_BTN.banish, `BANISH (${G.banishes})`, G.banishes ? '#ff5ce1' : '#55607a')
-  if (!touchy()) drawPrompts(ctx, input, [[n ? 'a' : 'b', n ? 'Pick' : 'Continue'], ['y', 'Reroll'], ['x', 'Banish'], ['menu', 'Pause']], { y: 770, size: 22 * cfg.textScale, font: `600 ${Math.round(22 * cfg.textScale)}px ${FONT}` })
+  if (touchy()) {
+    drawPauseButton(DRAFT_PAUSE_BTN)
+    text(touchText('Tap a card, then tap it again to pick it', 'Click a card to pick it'), W / 2, 778, 24, '#c8d0e8', 'center', 600)
+  } else drawPrompts(ctx, input, [[n ? 'a' : 'b', n ? 'Pick' : 'Continue'], ['y', 'Reroll'], ['x', 'Banish'], ['menu', 'Pause']], { y: 770, size: 22 * cfg.textScale, font: `600 ${Math.round(22 * cfg.textScale)}px ${FONT}` })
 }
 
 function buildSummary() {
@@ -4130,7 +4248,8 @@ function drawPause() {
   buildSummary()
     .slice(0, 12)
     .forEach(([l, c], i) => text(l, bx, 338 + i * 32, 24, c, 'left', 600))
-  drawPrompts(ctx, input, [['a', 'Select'], ['b', 'Resume']], { y: H - 48, size: 22 * cfg.textScale, font: `600 ${Math.round(22 * cfg.textScale)}px ${FONT}` })
+  if (input.mode === 'touch') text('Tap Resume to keep playing', W / 2, H - 40, 24, '#eef0f5', 'center', 600)
+  else drawPrompts(ctx, input, [['a', 'Select'], ['b', 'Resume']], { y: H - 48, size: 22 * cfg.textScale, font: `600 ${Math.round(22 * cfg.textScale)}px ${FONT}` })
 }
 
 function drawOver() {
@@ -4190,7 +4309,7 @@ function drawTitle(t) {
       save.best > 0 ? `Best ${fmt(save.best)}  ·  furthest sector ${save.bestSector} wave ${save.bestWave}` : ''
     ],
     [
-      'One huge arena. The swarm never stops. Bank upgrades and open them with ' + input.label('y') + '.',
+      'One huge arena. The swarm never stops. Bank upgrades and open them with ' + touchText('the UPGRADE button', input.label('y')) + '.',
       save.bestEndless > 0 ? `Best ${fmt(save.bestEndless)}  ·  longest ${mmss(save.bestTime)}` : ''
     ],
     ['Controls and the basics.', ''],
@@ -4224,24 +4343,26 @@ function drawTitle(t) {
     }
     ly += 8
   }
-  para(ship.role, '#c8d0e8')
-  para(`${input.label('lt')} ${ship.abilityName}: ${ship.abilityDesc}`, ship.glow)
-  para(`RULE: ${ship.rule}`, '#d8ff3a')
+  // Touch players have no right stick: they aim with the right thumb, and the ability is a button.
+  const thumb = (str) => touchText(str.replace(/the right stick/g, 'your right thumb'), str)
+  para(thumb(ship.role), '#c8d0e8')
+  para(touchText(`${ship.abilityName} button: ${ship.abilityDesc}`, `${input.label('lt')} ${ship.abilityName}: ${ship.abilityDesc}`), ship.glow)
+  para(thumb(`RULE: ${ship.rule}`), '#d8ff3a')
 
   if (!open && titleSel() < 2) text('This ship is locked: pick another with ◀ ▶', W / 2, H - 44, 26, '#ff6070', 'center', 600)
-  else text(`${input.label('a')} select  ·  ◀ ▶ ship  ·  ${input.label('menu')} pause`, W / 2, H - 44, 26, '#ffffff', 'center', 600)
+  else text(touchText('Tap a mode to start  ·  tap ◀ ▶ to change ship', `${input.label('a')} select  ·  ◀ ▶ ship  ·  ${input.label('menu')} pause`), W / 2, H - 44, 26, '#ffffff', 'center', 600)
 }
 
 function drawHowTo() {
   dim(0.82)
   glowText('HOW TO PLAY', W / 2, 112, 56, '#3fd8ff')
   const rows = [
-    [moveLabel(), 'Move'],
-    [aimLabel(), 'Aim and fire'],
+    touchText(['Left thumb', 'Move: drag on the left half'], [moveLabel(), 'Move']),
+    touchText(['Right thumb', 'Aim and fire: drag on the right half'], [aimLabel(), 'Aim and fire']),
     [touchy() ? 'BOMB button' : input.label(input.mode === 'keyboard' ? 'a' : 'rt'), 'Bomb: clears the screen'],
     [touchy() ? 'Ability button' : input.label('lt'), 'Ship ability (each ship has its own)'],
-    [input.label('y'), 'Endless: open a banked upgrade'],
-    [input.label('menu'), 'Pause']
+    [touchy() ? 'UPGRADE button' : input.label('y'), 'Endless: open a banked upgrade'],
+    [touchy() ? 'Pause button' : input.label('menu'), touchy() ? 'Pause (two bars, bottom of the screen)' : 'Pause']
   ]
   const x = W / 2 - 360
   rows.forEach(([k, v], i) => {
@@ -4252,7 +4373,8 @@ function drawHowTo() {
   })
   const tips = 'Every 25 geoms raises your multiplier (up to x10), but it slips if you stop collecting. Every card belongs to a synergy family: collect 2, 4 and 6 of one family for big bonuses.'
   wrap(tips, 900, 24).forEach((l, i) => text(l, W / 2, 596 + i * 32, 24, '#c8d0e8', 'center', 600))
-  drawPrompts(ctx, input, [['b', 'Back']], { y: H - 48, size: 22 * cfg.textScale, font: `600 ${Math.round(22 * cfg.textScale)}px ${FONT}` })
+  if (input.mode === 'touch') text('Tap anywhere to go back', W / 2, H - 40, 24, '#eef0f5', 'center', 600)
+  else drawPrompts(ctx, input, [['b', 'Back']], { y: H - 48, size: 22 * cfg.textScale, font: `600 ${Math.round(22 * cfg.textScale)}px ${FONT}` })
 }
 
 let clock = 0
@@ -4291,10 +4413,15 @@ function frame(now) {
   const dt = Math.min(1 / 20, (now - last) / 1000)
   last = now
   input.update(dt)
+  takeFingers()
   const t0 = performance.now()
-  update(dt)
+  const upright = portrait()
+  // Upright tablet: pause the run and hold everything until it's turned back.
+  if (upright) openPause()
+  else update(dt)
   const t1 = performance.now()
   draw(dt)
+  if (upright) drawTurnSideways()
   if (window.__prof) {
     window.__prof.u += t1 - t0
     window.__prof.d += performance.now() - t1
@@ -4307,6 +4434,12 @@ requestAnimationFrame(frame)
 window.__game = {
   // Where the on-screen pause button is, so the check can click it when playing with only a mouse.
   pauseButton: PAUSE_BTN,
+  // Touch buttons, for touch tests: Endless UPGRADE (shown with an upgrade banked) and the draft's pause.
+  upgradeButton: UPGRADE_BTN,
+  draftPauseButton: DRAFT_PAUSE_BTN,
+  get inputMode() {
+    return input.mode
+  },
   state,
   TUNING,
   save: saveStore,
@@ -4328,6 +4461,7 @@ if (location.search.includes('debug')) {
       screen = v
     },
     newRun,
+    openDraft,
     startWave,
     buildPool,
     applyCard,
