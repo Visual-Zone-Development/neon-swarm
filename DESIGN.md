@@ -2,7 +2,7 @@
 
 > Twin-stick neon arena roguelite: blast geometric swarms on a warping grid, draft a new weapon or rule-bending mod after every wave, and beat three bosses.
 
-*Status: shipped · Version: 1.13.0*
+*Status: shipped · Version: 1.14.0*
 
 Reverse-engineered from the shipped code (`game.js`, `data.js`, `audio.js`, `grid.js`, `input.js`). It describes what the game does today, not what it could do.
 
@@ -41,10 +41,10 @@ See [framework.md](../../docs/game-design/framework.md). Each target maps to a m
 | A (Space/Enter, click, tap) | Confirm in menus; launch from title; retry on game over |
 | B (Backspace, right-click) | Back in menus; resume from pause; title from game over |
 | X (Shift) | Banish the selected draft card (in the draft; also a button) |
-| Y (F or R) | Endless: open a banked upgrade draft. Reroll the draft (also a button) |
+| Y (F or R) | Endless: open a banked upgrade draft (mouse/touch: the UPGRADE ×N button under the XP bar, shown while upgrades are banked). Reroll the draft (also a button) |
 | Title: up/down + A | Menu (menu.js): Campaign, Endless, How to Play, Settings (Settings is also in the pause menu) |
 | Title: left/right, LB/RB, tap ◀ ▶ | Choose ship (shown in its own panel) |
-| Start / Esc / P / on-screen ≡ | Pause: Resume, Restart, Settings, Quit to title. Also pauses from the draft. Auto-pauses on the launcher overlay, lost focus or a lost controller |
+| Start / Esc / P / on-screen pause button | Pause: Resume, Restart, Settings, Quit to title. Mouse/touch: the two-bar button at the bottom centre in play (any finger, so it works while the other thumb steers) and at the end of the PICK / REROLL / BANISH row in the draft. Auto-pauses on the launcher overlay, lost focus, a lost controller or a tablet turned upright |
 
 ## Inspirations
 | Game | Borrow | Change / avoid |
@@ -137,7 +137,8 @@ Tailored from [complete-game.md](../../docs/game-design/complete-game.md):
 - [x] SFX for every action and a music loop
 - [x] Volume / mute setting
 - [x] Title menu with the best score for the selected mode and a `select` prompt
-- [x] Pause on `menu` (Start / Esc / P / ≡ button) with Resume, Restart, Settings, Quit to title; auto-pauses via `input.onPause`
+- [x] Pause on `menu` (Start / Esc / P / on-screen pause button in play and in the draft) with Resume, Restart, Settings, Quit to title; auto-pauses via `input.onPause`
+- [x] Touch-only play on a tablet: starts in touch mode on a touch screen, every action has an on-screen button (BOMB, ability, UPGRADE, pause), taps from a second finger count while the other thumb steers, touch text names what's on screen, new touch players get auto-fire, and an upright tablet is asked to turn sideways (`tests/touch.test.mjs`)
 - [x] Game over and victory screens with stats and build
 - [x] Settings screen (title and pause)
 - [x] Saves under a versioned key (`neon-swarm-save-v1`; 1.3 fields `settings`, `taught`, `bestEndless`, `bestTime`, `endless` are merged into older saves)
@@ -146,9 +147,9 @@ Tailored from [complete-game.md](../../docs/game-design/complete-game.md):
 - [x] Text at least 24px
 - [x] `TUNING` object at the top of `game.js` for player, enemy scaling, waves, assist, endless and difficulty numbers (weapon and boss numbers still live in their code)
 - [x] Delta-time movement, clamped to 1/20 s
-- [x] `?debug` hook (`window.__ns`) and `window.__game = { state, TUNING, save, settings, titleMenu }`
+- [x] `?debug` hook (`window.__ns`) and `window.__game = { state, TUNING, save, settings, titleMenu, pauseButton, upgradeButton, draftPauseButton, inputMode }`
 - [ ] Steady 60fps on the Deck (not measured; `window.__prof` exists)
-- [x] `npm run check` passes
+- [x] `node --test` passes (touch play on a tablet, in Playwright's Chromium)
 
 ## Open questions / assumptions
 - Assumed Sensation is the primary target: the grid, particles and synth audio carry the identity, and the roguelite drafting builds on it.
@@ -159,6 +160,7 @@ Tailored from [complete-game.md](../../docs/game-design/complete-game.md):
 - Endless pacing (`TUNING.endless`): threat climbs one campaign wave every 18 s; first level-up at 30 geoms, each level needs 30% more plus 8.
 
 ## Changelog
+- 1.14.0: Touch-only tablets. The game starts in touch mode on a touch screen (no controller), so the buttons are there before the first tap. Endless has an **UPGRADE ×N** button under the XP bar (it used to need Y). The draft has a pause button. The pause, draft and game-over buttons answer any finger, so pausing works while the other thumb steers, and a thumb that was steering doesn't choose a menu row or card when it lifts. Touch text says what's on screen (UPGRADE button, pause button, "tap a card, then tap it again", right thumb instead of right stick). New touch players start with Aiming on AUTO-FIRE unless they chose Aiming in Settings. An upright tablet pauses the run and asks to be turned sideways. No page scrolling, zooming, text selection or tap flash on touch.
 - 1.13.1: Build kit v6. Inside the launcher the pause menu ends with **Quit to library** (added by `menu.js`), so players can always find their way back to their games.
 - 1.13.0: Ship roster. Removed Striker, Prism and Bulwark (and their Spread Shot, Ricochet and Flak weapons). New ship Bombard: Nova Mortar shells fire slowly but burst in a huge blast whose kills chain into more blasts; LT detonates shells in flight. Interceptor's LT is now Barrage (3s of triple fire rate and piercing bolts, kills extend it) instead of Dash. Reaper is safer on a miss: every Reap ends in a shockwave with 0.5s of invulnerability, and a Reap with no kills refunds half its cooldown. The last-picked ship is saved by id.
 - 1.12.0: Kit v2 runtime: title, pause (Resume, Restart, Settings, Quit to title) and game-over menus on `menu.js`, Settings on `settings.js` (volumes, reduced shake & flash, text size, plus difficulty, aiming and rumble; old in-save settings migrate once), auto-pause through `input.onPause`, on-screen pause button, `fit.js` scaling with a DPR cap, saves through `save.js` under the same key, prompts from `input.label` / `drawPrompts`. Mouse (aim with the pointer, hold to fire) and touch (two virtual sticks plus BOMB and ability buttons; draft cards and buttons tappable) gameplay. Esc now pauses instead of acting as B; B/Backspace never pauses.
