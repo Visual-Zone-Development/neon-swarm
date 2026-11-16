@@ -778,6 +778,46 @@ function setArrowsAim(on) {
 }
 // Touch: a finger on the left half is the move stick, on the right half the aim stick.
 const touchSticks = new Map()
+// Where the two sticks rest until a thumb lands (they then follow the thumb). Clear of the weapon
+// label, the pause button and the BARRAGE / BOMB buttons.
+const STICK_HOME = { move: { x: 210, y: 600 }, aim: { x: 870, y: 600 } }
+/** The two touch sticks: faint at rest with MOVE / AIM + FIRE under them, solid under a thumb. */
+function drawTouchSticks() {
+  if (input.mode !== 'touch') return
+  const R = TUNING.player.touchStickRange
+  screenT()
+  for (const side of ['move', 'aim']) {
+    let base = STICK_HOME[side]
+    let knob = base
+    let held = false
+    for (const [id, st] of touchSticks) {
+      const p = input.pointers.get(id)
+      if (st.side !== side || !p?.down) continue
+      held = true
+      base = st
+      const dx = p.x - st.x
+      const dy = p.y - st.y
+      const k = Math.min(1, R / (Math.hypot(dx, dy) || 1))
+      knob = { x: st.x + dx * k, y: st.y + dy * k }
+      break
+    }
+    const color = side === 'move' ? '#3fd8ff' : '#ff5ce1'
+    ctx.globalAlpha = held ? 0.7 : 0.35
+    ctx.strokeStyle = color
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.arc(base.x, base.y, R, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.fillStyle = color
+    ctx.globalAlpha = held ? 0.5 : 0.22
+    ctx.beginPath()
+    ctx.arc(knob.x, knob.y, 30, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.globalAlpha = held ? 0 : 0.6
+    if (!held) text(side === 'move' ? 'MOVE' : 'AIM + FIRE', base.x, base.y + R + 30, 20, color)
+  }
+  ctx.globalAlpha = 1
+}
 function aimLabel() {
   return { gamepad: 'Right stick', keyboard: 'Arrows', mouse: 'Mouse (hold to fire)', touch: 'Drag right side' }[input.mode] ?? 'Arrows'
 }
@@ -3439,16 +3479,20 @@ function coarsePointer() {
 }
 const padConnected = () => [...(navigator.getGamepads?.() ?? [])].some((p) => p && p.connected !== false)
 if (input.mode !== 'gamepad' && coarsePointer() && !padConnected()) input.mode = 'touch'
-// New touch players get auto-fire, so one thumb moves and the ship shoots. Never over a choice made
-// in Settings (cfg.assistChosen), and only from Off: aim assist or auto-fire already set stay as they are.
+// 1.14.0 switched touch players to auto-fire, which took the aim stick away from them. Undo that once
+// per device: auto-fire that wasn't picked in Settings goes back to Off, so the right thumb aims and
+// fires again. A choice made in Settings (cfg.assistChosen) is kept.
 let touchSeen = false
 function watchTouch() {
   if (touchSeen || input.mode !== 'touch') return
   touchSeen = true
-  if (cfg.assistChosen || cfg.assist !== 0) return
-  cfg.assist = 2
-  const item = settingsScreen.menu.items.find((it) => it.id === 'assist')
-  if (item) item.value = 2
+  if (cfg.touchAimReset) return
+  cfg.touchAimReset = true
+  if (!cfg.assistChosen && cfg.assist === 2) {
+    cfg.assist = 0
+    const item = settingsScreen.menu.items.find((it) => it.id === 'assist')
+    if (item) item.value = 0
+  }
   settings.save()
 }
 watchTouch()
@@ -4394,6 +4438,7 @@ function draw(dt) {
     shx = shy = 0
     drawRadar()
     if (screen !== 'settings') drawHud()
+    if (screen === 'playing') drawTouchSticks()
     if (screen === 'playing') drawBanner()
     if (screen === 'draft') drawDraft()
     if (screen === 'paused') drawPause()
@@ -4437,6 +4482,11 @@ window.__game = {
   // Touch buttons, for touch tests: Endless UPGRADE (shown with an upgrade banked) and the draft's pause.
   upgradeButton: UPGRADE_BTN,
   draftPauseButton: DRAFT_PAUSE_BTN,
+  // Where the touch sticks rest, and the sticks under a thumb right now ({ x, y, side }).
+  stickHome: STICK_HOME,
+  get sticks() {
+    return [...touchSticks.values()]
+  },
   get inputMode() {
     return input.mode
   },

@@ -87,8 +87,8 @@ test('starts in touch mode on a touch screen', async () => {
   const { context, page, errors } = await open()
   // No tap yet: the touch buttons and text must already be there.
   assert.equal(await page.evaluate(() => window.__game.inputMode), 'touch')
-  // A new touch player gets auto-fire, saved like any other setting.
-  assert.equal(await page.evaluate(() => window.__game.settings.data.assist), 2)
+  // A new touch player aims with the right thumb: no auto-fire unless they pick it in Settings.
+  assert.equal(await page.evaluate(() => window.__game.settings.data.assist), 0)
   // The upright check needs a real touch screen held sideways: this one is landscape.
   assert.equal(await screen(page), 'title')
   assert.deepEqual(errors, [])
@@ -96,13 +96,52 @@ test('starts in touch mode on a touch screen', async () => {
 })
 
 test('keeps a saved Aiming choice', async () => {
-  const chosen = await open({}, { assist: 0, assistChosen: true })
-  assert.equal(await chosen.page.evaluate(() => window.__game.settings.data.assist), 0)
+  const chosen = await open({}, { assist: 2, assistChosen: true })
+  assert.equal(await chosen.page.evaluate(() => window.__game.settings.data.assist), 2)
   await chosen.context.close()
-  // Aim assist picked before is kept too (auto-fire only replaces Off).
   const assisted = await open({}, { assist: 1 })
   assert.equal(await assisted.page.evaluate(() => window.__game.settings.data.assist), 1)
   await assisted.context.close()
+})
+
+test('turns off the auto-fire 1.14.0 switched on for a touch player who never chose it', async () => {
+  const { context, page } = await open({}, { assist: 2 })
+  assert.equal(await page.evaluate(() => window.__game.settings.data.assist), 0)
+  await context.close()
+  // Only once: auto-fire picked afterwards stays.
+  const later = await open({}, { assist: 2, touchAimReset: true })
+  assert.equal(await later.page.evaluate(() => window.__game.settings.data.assist), 2)
+  await later.context.close()
+})
+
+test('aims and fires with the right thumb, moves with the left', async () => {
+  const { context, page, errors } = await open()
+  await startRun(page, false)
+  await page.evaluate(() => {
+    const { G } = window.__ns
+    G.P.x = 0
+    G.P.y = 0
+  })
+  const touch = await touchscreen(context, page)
+  const home = await page.evaluate(() => window.__game.stickHome)
+  const moveAt = await toPage(page, home.move.x, home.move.y)
+  const aimAt = await toPage(page, home.aim.x, home.aim.y)
+  const aimTo = await toPage(page, home.aim.x, home.aim.y - 60)
+  const start = await page.evaluate(() => ({ x: window.__ns.G.P.x, y: window.__ns.G.P.y }))
+  // Left thumb pushes right; right thumb drags straight up.
+  await touch('touchStart', [[moveAt.x, moveAt.y, 1], [aimAt.x, aimAt.y, 2]])
+  const moveTo = await toPage(page, home.move.x + 60, home.move.y)
+  for (let i = 0; i < 6; i++) {
+    await touch('touchMove', [[moveTo.x, moveTo.y, 1], [aimTo.x, aimTo.y, 2]])
+    await page.waitForTimeout(60)
+  }
+  const s = await page.evaluate(() => ({ sticks: window.__game.sticks.map((t) => t.side).sort(), aim: window.__ns.G.P.aim, x: window.__ns.G.P.x }))
+  assert.deepEqual(s.sticks, ['aim', 'move'])
+  assert.ok(Math.abs(s.aim + Math.PI / 2) < 0.2, `aims up (aim ${s.aim.toFixed(2)})`)
+  assert.ok(s.x > start.x + 20, `moves right (x ${start.x.toFixed(0)} → ${s.x.toFixed(0)})`)
+  await touch('touchEnd', [[moveTo.x, moveTo.y, 1], [aimTo.x, aimTo.y, 2]])
+  assert.deepEqual(errors, [])
+  await context.close()
 })
 
 test('opens a banked upgrade with the on-screen button in Endless', async () => {

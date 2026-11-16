@@ -2,7 +2,7 @@
 
 > Twin-stick neon arena roguelite: blast geometric swarms on a warping grid, draft a new weapon or rule-bending mod after every wave, and beat three bosses.
 
-*Status: shipped · Version: 1.14.0*
+*Status: shipped · Version: 1.14.1*
 
 Reverse-engineered from the shipped code (`game.js`, `data.js`, `audio.js`, `grid.js`, `input.js`). It describes what the game does today, not what it could do.
 
@@ -138,7 +138,7 @@ Tailored from [complete-game.md](../../docs/game-design/complete-game.md):
 - [x] Volume / mute setting
 - [x] Title menu with the best score for the selected mode and a `select` prompt
 - [x] Pause on `menu` (Start / Esc / P / on-screen pause button in play and in the draft) with Resume, Restart, Settings, Quit to title; auto-pauses via `input.onPause`
-- [x] Touch-only play on a tablet: starts in touch mode on a touch screen, every action has an on-screen button (BOMB, ability, UPGRADE, pause), taps from a second finger count while the other thumb steers, touch text names what's on screen, new touch players get auto-fire, and an upright tablet is asked to turn sideways (`tests/touch.test.mjs`)
+- [x] Touch-only play on a tablet: starts in touch mode on a touch screen, every action has an on-screen button (BOMB, ability, UPGRADE, pause), taps from a second finger count while the other thumb steers, touch text names what's on screen, the two touch sticks are drawn (resting at bottom left and right, following the thumb), and an upright tablet is asked to turn sideways (`tests/touch.test.mjs`)
 - [x] Game over and victory screens with stats and build
 - [x] Settings screen (title and pause)
 - [x] Saves under a versioned key (`neon-swarm-save-v1`; 1.3 fields `settings`, `taught`, `bestEndless`, `bestTime`, `endless` are merged into older saves)
@@ -160,6 +160,7 @@ Tailored from [complete-game.md](../../docs/game-design/complete-game.md):
 - Endless pacing (`TUNING.endless`): threat climbs one campaign wave every 18 s; first level-up at 30 geoms, each level needs 30% more plus 8.
 
 ## Changelog
+- 1.14.1: Touch players aim again. The two touch sticks are drawn: faint at rest (MOVE bottom left, AIM + FIRE bottom right), solid under the thumb, and they follow where the thumb lands. 1.14.0's auto-fire default for touch is gone; a touch player it switched to auto-fire without them choosing it in Settings goes back to Off once. Auto-fire picked in Settings stays.
 - 1.14.0: Touch-only tablets. The game starts in touch mode on a touch screen (no controller), so the buttons are there before the first tap. Endless has an **UPGRADE ×N** button under the XP bar (it used to need Y). The draft has a pause button. The pause, draft and game-over buttons answer any finger, so pausing works while the other thumb steers, and a thumb that was steering doesn't choose a menu row or card when it lifts. Touch text says what's on screen (UPGRADE button, pause button, "tap a card, then tap it again", right thumb instead of right stick). New touch players start with Aiming on AUTO-FIRE unless they chose Aiming in Settings. An upright tablet pauses the run and asks to be turned sideways. No page scrolling, zooming, text selection or tap flash on touch.
 - 1.13.1: Build kit v6. Inside the launcher the pause menu ends with **Quit to library** (added by `menu.js`), so players can always find their way back to their games.
 - 1.13.0: Ship roster. Removed Striker, Prism and Bulwark (and their Spread Shot, Ricochet and Flak weapons). New ship Bombard: Nova Mortar shells fire slowly but burst in a huge blast whose kills chain into more blasts; LT detonates shells in flight. Interceptor's LT is now Barrage (3s of triple fire rate and piercing bolts, kills extend it) instead of Dash. Reaper is safer on a miss: every Reap ends in a shockwave with 0.5s of invulnerability, and a Reap with no kills refunds half its cooldown. The last-picked ship is saved by id.
