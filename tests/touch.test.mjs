@@ -54,13 +54,19 @@ async function open(options = {}, settings) {
   return { context, page, errors }
 }
 
-/** Game coordinates (1280×800) → page coordinates, through the letterboxed canvas. */
+/** View coordinates (the game's w×h, which fills the screen) → page coordinates, through the canvas. */
 async function toPage(page, x, y) {
   const r = await page.evaluate(() => {
     const b = document.getElementById('game').getBoundingClientRect()
-    return { left: b.left, top: b.top, width: b.width, height: b.height }
+    const v = window.__game.view
+    return { left: b.left, top: b.top, width: b.width, height: b.height, w: v.w, h: v.h }
   })
-  return { x: r.left + (x / 1280) * r.width, y: r.top + (y / 800) * r.height }
+  return { x: r.left + (x / r.w) * r.width, y: r.top + (y / r.h) * r.height }
+}
+/** Menu coordinates (the 1280×800 box the menus are laid out in, centred in the view) → page coordinates. */
+async function toPageUi(page, x, y) {
+  const v = await page.evaluate(() => window.__game.view)
+  return toPage(page, x + v.x, y + v.y)
 }
 const middle = (r) => [r.x + r.w / 2, r.y + r.h / 2]
 const screen = (page) => page.evaluate(() => window.__ns.screen)
@@ -114,6 +120,23 @@ test('turns off the auto-fire 1.14.0 switched on for a touch player who never ch
   await later.context.close()
 })
 
+test('turns off that auto-fire on a tablet played with a controller too', async () => {
+  // The app on an iPad with a pad paired: the shell says gamepad and a controller is connected.
+  const context = await browser.newContext(TABLET)
+  await context.addInitScript(() => {
+    localStorage.setItem('neon-swarm-settings-v1', JSON.stringify({ assist: 2 }))
+    globalThis.pushplay = { inputMode: 'gamepad', gamingMode: true, onPause: () => () => {}, onResume: () => () => {} }
+    const pad = { id: 'Fake pad', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 })), timestamp: 0 }
+    navigator.getGamepads = () => [pad, null, null, null]
+  })
+  const page = await context.newPage()
+  await page.goto(`${base}index.html?debug`)
+  await page.waitForFunction(() => window.__game && window.__ns)
+  assert.equal(await page.evaluate(() => window.__game.inputMode), 'gamepad')
+  assert.equal(await page.evaluate(() => window.__game.settings.data.assist), 0)
+  await context.close()
+})
+
 test('aims and fires with the right thumb, moves with the left', async () => {
   const { context, page, errors } = await open()
   await startRun(page, false)
@@ -165,7 +188,7 @@ test('pauses from the draft screen by tap', async () => {
   assert.equal(await screen(page), 'draft')
   await page.waitForTimeout(100)
   const btn = await page.evaluate(() => window.__game.draftPauseButton)
-  const at = await toPage(page, ...middle(btn))
+  const at = await toPageUi(page, ...middle(btn))
   await page.touchscreen.tap(at.x, at.y)
   await page.waitForFunction(() => window.__ns.screen === 'paused', null, { timeout: 2000 })
   assert.deepEqual(errors, [])
@@ -204,7 +227,7 @@ test('lifting the steering thumb over a card does not pick it', async () => {
   const { context, page, errors } = await open()
   await startRun(page, true)
   const touch = await touchscreen(context, page)
-  const thumb = await toPage(page, 640, 400) // over the middle card, which starts selected
+  const thumb = await toPageUi(page, 640, 400) // over the middle card, which starts selected
   await touch('touchStart', [[thumb.x, thumb.y, 0]])
   await page.waitForTimeout(50)
   await page.evaluate(() => window.__ns.openDraft())
@@ -220,7 +243,7 @@ test('picks a draft card with a second finger while the first is still down', as
   const { context, page, errors } = await open()
   await startRun(page, true)
   const touch = await touchscreen(context, page)
-  const thumb = await toPage(page, 640, 400) // over the middle card, which starts selected
+  const thumb = await toPageUi(page, 640, 400) // over the middle card, which starts selected
   await touch('touchStart', [[thumb.x, thumb.y, 0]])
   await page.waitForTimeout(50)
   await page.evaluate(() => {
@@ -228,7 +251,7 @@ test('picks a draft card with a second finger while the first is still down', as
     window.__ns.openDraft()
   })
   await page.waitForTimeout(600) // past the draft's input lock
-  const pick = await toPage(page, 166 + 150, 684 + 26) // PICK
+  const pick = await toPageUi(page, 166 + 150, 684 + 26) // PICK
   await touch('touchStart', [[thumb.x, thumb.y, 0], [pick.x, pick.y, 1]])
   await page.waitForTimeout(80)
   await touch('touchEnd', [[pick.x, pick.y, 1]])
