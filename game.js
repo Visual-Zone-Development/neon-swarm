@@ -3480,11 +3480,13 @@ function coarsePointer() {
 const padConnected = () => [...(navigator.getGamepads?.() ?? [])].some((p) => p && p.connected !== false)
 if (input.mode !== 'gamepad' && coarsePointer() && !padConnected()) input.mode = 'touch'
 // 1.14.0 switched touch players to auto-fire, which took the aim stick away from them. Undo that once
-// per device: auto-fire that wasn't picked in Settings goes back to Off, so the right thumb aims and
-// fires again. A choice made in Settings (cfg.assistChosen) is kept.
+// per device: auto-fire that wasn't picked in Settings goes back to Off, so the right thumb (or the
+// right stick) aims and fires again. A choice made in Settings (cfg.assistChosen) is kept. A tablet
+// with a controller connected starts in gamepad mode, so a touch screen is enough: 1.14.1 waited for
+// touch mode and never undid it for someone playing with a pad.
 let touchSeen = false
 function watchTouch() {
-  if (touchSeen || input.mode !== 'touch') return
+  if (touchSeen || (input.mode !== 'touch' && !coarsePointer())) return
   touchSeen = true
   if (cfg.touchAimReset) return
   cfg.touchAimReset = true
