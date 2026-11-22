@@ -2,7 +2,7 @@
 
 > Twin-stick neon arena roguelite: blast geometric swarms on a warping grid, draft a new weapon or rule-bending mod after every wave, and beat three bosses.
 
-*Status: shipped · Version: 1.14.2*
+*Status: shipped · Version: 1.15.0*
 
 Reverse-engineered from the shipped code (`game.js`, `data.js`, `audio.js`, `grid.js`, `input.js`). It describes what the game does today, not what it could do.
 
@@ -160,6 +160,7 @@ Tailored from [complete-game.md](../../docs/game-design/complete-game.md):
 - Endless pacing (`TUNING.endless`): threat climbs one campaign wave every 18 s; first level-up at 30 geoms, each level needs 30% more plus 8.
 
 ## Changelog
+- 1.15.0: Fills TVs and wide or tall screens: no more black bars. On a 16:9 TV or monitor the view is wider and shows more of the arena to the sides; on a 4:3 tablet it shows more above and below. The Deck's 1280×800 is unchanged. What decides difficulty doesn't change with the screen: the boss arena stays 1280×800 and enemies spawn around the same 1280×800 middle of the view. The HUD and the touch buttons and sticks keep to the screen's edges; the title, draft, pause, settings and game-over screens stay centred. (`fit.js` is the kit's v11, with `fill`.)
 - 1.14.2: A tablet played with a controller stops auto-firing. 1.14.1 only undid 1.14.0's auto-fire once the game was in touch mode, and an iPad with a pad paired starts in gamepad mode, so it never happened; it now runs on any touch screen, whatever is being used. A choice made in Settings still stays. (The Hunter's missiles launch on their own by design, whatever Aiming says.)
 - 1.14.1: Touch players aim again. The two touch sticks are drawn: faint at rest (MOVE bottom left, AIM + FIRE bottom right), solid under the thumb, and they follow where the thumb lands. 1.14.0's auto-fire default for touch is gone; a touch player it switched to auto-fire without them choosing it in Settings goes back to Off once. Auto-fire picked in Settings stays.
 - 1.14.0: Touch-only tablets. The game starts in touch mode on a touch screen (no controller), so the buttons are there before the first tap. Endless has an **UPGRADE ×N** button under the XP bar (it used to need Y). The draft has a pause button. The pause, draft and game-over buttons answer any finger, so pausing works while the other thumb steers, and a thumb that was steering doesn't choose a menu row or card when it lifts. Touch text says what's on screen (UPGRADE button, pause button, "tap a card, then tap it again", right thumb instead of right stick). New touch players start with Aiming on AUTO-FIRE unless they chose Aiming in Settings. An upright tablet pauses the run and asks to be turned sideways. No page scrolling, zooming, text selection or tap flash on touch.

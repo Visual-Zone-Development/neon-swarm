@@ -94,16 +94,36 @@ const TUNING = {
 }
 
 const ID = 'neon-swarm'
-// Draw in a fixed 1280×800 space (the Steam Deck screen); fit.js scales and letterboxes it.
-const W = 1280
-const H = 800
+// The game is made for 1280×800 (the Steam Deck screen), and fills any other screen shape with no
+// bars: fit.js grows the view (W×H) to the screen, so a TV or ultrawide sees more of the arena to
+// the sides and a 4:3 tablet more above and below. Never less than 1280×800, never stretched.
+// What decides difficulty stays at 1280×800: the boss box and where enemies spawn. Menus keep their
+// 1280×800 layout, centred in the view at (OX, OY): draw them with `ui` on (see screenT).
+const BW = 1280
+const BH = 800
 const canvas = document.getElementById('game')
-const fit = fitCanvas(canvas, { w: W, h: H, letterbox: '#000' })
+const fit = fitCanvas(canvas, { w: BW, h: BH, letterbox: '#000', fill: true })
 const ctx = fit.ctx
+let W = fit.w
+let H = fit.h
+let OX = (W - BW) / 2
+let OY = (H - BH) / 2
+/** Drawing a menu: screenT() and blit() put 0,0 at the 1280×800 box's corner. */
+let ui = false
 input.attach(canvas, W, H)
 // Device pixels per game unit: the world/screen transforms below set it themselves (camera + shake).
 let K = canvas.width / W
-fit.onResize(() => (K = canvas.width / W))
+fit.onResize(() => {
+  W = fit.w
+  H = fit.h
+  OX = (W - BW) / 2
+  OY = (H - BH) / 2
+  K = canvas.width / W
+  input.attach(canvas, W, H)
+  layoutButtons()
+  // The title's attract swarm plays in a one-screen arena: the whole view.
+  if (!G) setArena(W, H)
+})
 // R is reroll on the keyboard too (F is the default for y).
 input.extendKeys({ KeyR: 'y' })
 
@@ -123,16 +143,17 @@ let B = AH - 16
 // Camera: top-left of the visible screen in arena coordinates.
 const cam = { x: 0, y: 0, lx: 0, ly: 0 }
 // Boss arena: during a boss fight the camera locks onto one screen-sized box and walls keep you in it.
-const BB = { on: false, x0: L, y0: T, x1: W - 16, y1: H - 16, cx: W / 2, cy: H / 2 }
+const BB = { on: false, x0: L, y0: T, x1: BW - 16, y1: BH - 16, cx: BW / 2, cy: BH / 2 }
 function G_bossBox(on) {
   BB.on = on
   if (!on) return
-  BB.cx = clamp(cam.x + W / 2, W / 2, AW - W / 2)
-  BB.cy = clamp(cam.y + H / 2, H / 2, AH - H / 2)
-  BB.x0 = BB.cx - W / 2 + 16
-  BB.x1 = BB.cx + W / 2 - 16
-  BB.y0 = BB.cy - H / 2 + 16
-  BB.y1 = BB.cy + H / 2 - 16
+  // Always 1280×800, whatever the screen: a wider view only shows more around it.
+  BB.cx = clamp(cam.x + W / 2, BW / 2, AW - BW / 2)
+  BB.cy = clamp(cam.y + H / 2, BH / 2, AH - BH / 2)
+  BB.x0 = BB.cx - BW / 2 + 16
+  BB.x1 = BB.cx + BW / 2 - 16
+  BB.y0 = BB.cy - BH / 2 + 16
+  BB.y1 = BB.cy + BH / 2 - 16
 }
 const TAU = Math.PI * 2
 
@@ -590,13 +611,26 @@ function worldT() {
   ctx.setTransform(K, 0, 0, K, shx * K, shy * K)
 }
 function screenT() {
-  ctx.setTransform(K, 0, 0, K, 0, 0)
+  ctx.setTransform(K, 0, 0, K, ui ? OX * K : 0, ui ? OY * K : 0)
 }
+/** Draw fn as a menu: in the 1280×800 box centred in the view. */
+function inUi(fn) {
+  const was = ui
+  ui = true
+  screenT()
+  try {
+    fn()
+  } finally {
+    ui = was
+  }
+}
+/** The pointer where the current drawing space has it (menus are offset by OX, OY). */
+const uiPointer = () => (ui ? { x: input.pointer.x - OX, y: input.pointer.y - OY } : input.pointer)
 function blit(img, x, y, ang = 0, scale = 1, alpha = 1) {
   const s = (scale / SS) * K
   const c = Math.cos(ang) * s
   const n = Math.sin(ang) * s
-  ctx.setTransform(c, n, -n, c, (x + shx) * K, (y + shy) * K)
+  ctx.setTransform(c, n, -n, c, (x + shx + (ui ? OX : 0)) * K, (y + shy + (ui ? OY : 0)) * K)
   ctx.globalAlpha = alpha
   ctx.drawImage(img, -img.width / 2, -img.height / 2)
 }
@@ -625,8 +659,9 @@ function updateCamera(dt, snap = false) {
   cam.lx += (lx - cam.lx) * kl
   cam.ly += (ly - cam.ly) * kl
   const o = E.camOver
-  let tx = clamp(P.x + cam.lx - W / 2, -o, AW - W + o)
-  let ty = clamp(P.y + cam.ly - H / 2, -o, AH - H + o)
+  // A view bigger than the arena (with its overscan) centres on it.
+  let tx = AW - W + o < -o ? (AW - W) / 2 : clamp(P.x + cam.lx - W / 2, -o, AW - W + o)
+  let ty = AH - H + o < -o ? (AH - H) / 2 : clamp(P.y + cam.ly - H / 2, -o, AH - H + o)
   if (BB.on) {
     tx = BB.cx - W / 2
     ty = BB.cy - H / 2
@@ -683,24 +718,37 @@ const pauseMenu = createMenu(
     { id: 'settings', label: 'Settings' },
     { id: 'title', label: 'Quit to title' }
   ],
-  { x: W / 2 - 220, y: 290, width: 360, height: 60, gap: 16, accent: '#3fd8ff', idle: 'rgba(8,10,22,0.9)' }
+  { x: BW / 2 - 220, y: 290, width: 360, height: 60, gap: 16, accent: '#3fd8ff', idle: 'rgba(8,10,22,0.9)' }
 )
 const overMenu = createMenu(
   [
     { id: 'again', label: 'RETRY' },
     { id: 'title', label: 'TITLE' }
   ],
-  { y: H - 150, width: 360, height: 58, gap: 12, accent: '#3ddc84', idle: 'rgba(8,10,22,0.9)' }
+  { y: BH - 150, width: 360, height: 58, gap: 12, accent: '#3ddc84', idle: 'rgba(8,10,22,0.9)' }
 )
 const menuFont = (px = 28) => `700 ${Math.round(px * cfg.textScale)}px ${FONT}`
-// On-screen buttons for mouse and touch players (game coordinates).
-const PAUSE_BTN = { x: W / 2 - 28, y: H - 76, w: 56, h: 56 }
-const BOMB_BTN = { x: W - 48 - 150, y: H - 84, w: 150, h: 56 }
-const ABILITY_BTN = { x: W - 48 - 220, y: H - 168, w: 220, h: 56 }
+// On-screen buttons for mouse and touch players during play, in view coordinates: they keep to the
+// view's edges (layoutButtons runs again when the screen changes shape).
+const PAUSE_BTN = { x: 0, y: 0, w: 56, h: 56 }
+const BOMB_BTN = { x: 0, y: 0, w: 150, h: 56 }
+const ABILITY_BTN = { x: 0, y: 0, w: 220, h: 56 }
 // Endless: opens a banked upgrade. Top centre under the XP bar, away from the thumbs and the other buttons.
-const UPGRADE_BTN = { x: W / 2 - 120, y: 98, w: 240, h: 50 }
-// Pause in the draft: the end of the PICK / REROLL / BANISH row (the play pause button would overlap REROLL).
-const DRAFT_PAUSE_BTN = { x: W / 2 + 498, y: 684, w: 52, h: 52 }
+const UPGRADE_BTN = { x: 0, y: 98, w: 240, h: 50 }
+// Where the two touch sticks rest until a thumb lands (they then follow the thumb). Clear of the
+// weapon label, the pause button and the BARRAGE / BOMB buttons.
+const STICK_HOME = { move: { x: 210, y: 600 }, aim: { x: 870, y: 600 } }
+function layoutButtons() {
+  Object.assign(PAUSE_BTN, { x: W / 2 - 28, y: H - 76 })
+  Object.assign(BOMB_BTN, { x: W - 48 - 150, y: H - 84 })
+  Object.assign(ABILITY_BTN, { x: W - 48 - 220, y: H - 168 })
+  UPGRADE_BTN.x = W / 2 - 120
+  Object.assign(STICK_HOME.move, { x: 210, y: H - 200 })
+  Object.assign(STICK_HOME.aim, { x: W - 410, y: H - 200 })
+}
+layoutButtons()
+// Pause in the draft (a menu, so in the 1280×800 box): the end of the PICK / REROLL / BANISH row.
+const DRAFT_PAUSE_BTN = { x: BW / 2 + 498, y: 684, w: 52, h: 52 }
 const TITLE_ARROW = { left: { x: 940 - 230, y: 370, w: 80, h: 80 }, right: { x: 940 + 150, y: 370, w: 80, h: 80 } }
 const inside = (p, r) => p && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h
 /** A pointer click or tap that ended inside r this frame. */
@@ -718,6 +766,20 @@ const fingers = { down: [], up: [] }
 function toGamePoint(e) {
   const r = canvas.getBoundingClientRect()
   return { id: e.pointerId, x: ((e.clientX - r.left) / (r.width || 1)) * W, y: ((e.clientY - r.top) / (r.height || 1)) * H, primary: e.isPrimary !== false }
+}
+/** Menus are laid out in the 1280×800 box: move every pointer into it (-OX, -OY) and back (+OX, +OY). */
+function shiftPointers(dx, dy) {
+  if (!dx && !dy) return
+  input.pointer.x += dx
+  input.pointer.y += dy
+  for (const p of input.pointers.values()) {
+    p.x += dx
+    p.y += dy
+  }
+  for (const p of [...fingers.down, ...fingers.up]) {
+    p.x += dx
+    p.y += dy
+  }
 }
 addEventListener('pointerdown', (e) => e.button !== 2 && fingerQueue.down.push(toGamePoint(e)))
 addEventListener('pointerup', (e) => e.button !== 2 && fingerQueue.up.push(toGamePoint(e)))
@@ -762,7 +824,7 @@ const touchText = (touchStr, otherStr) => (input.mode === 'touch' ? touchStr : o
 const upgradeShown = () => touchy() && screen === 'playing' && !!G?.endless && G.pending > 0 && G.P.alive
 /** Draw a tappable panel button; returns true when it was clicked or tapped. */
 function button(r, label, color = '#ffffff', hot = false) {
-  const hover = input.mode === 'mouse' && inside(input.pointer, r)
+  const hover = input.mode === 'mouse' && inside(uiPointer(), r)
   panel(r.x, r.y, r.w, r.h, hot || hover ? '#ffffff' : color, hot ? 'rgba(20,26,40,0.96)' : 'rgba(8,10,22,0.9)', hot ? 4 : 2)
   text(label, r.x + r.w / 2, r.y + r.h / 2 + 8, 22, '#ffffff')
   return tapped(r)
@@ -778,9 +840,6 @@ function setArrowsAim(on) {
 }
 // Touch: a finger on the left half is the move stick, on the right half the aim stick.
 const touchSticks = new Map()
-// Where the two sticks rest until a thumb lands (they then follow the thumb). Clear of the weapon
-// label, the pause button and the BARRAGE / BOMB buttons.
-const STICK_HOME = { move: { x: 210, y: 600 }, aim: { x: 870, y: 600 } }
 /** The two touch sticks: faint at rest with MOVE / AIM + FIRE under them, solid under a thumb. */
 function drawTouchSticks() {
   if (input.mode !== 'touch') return
@@ -1265,8 +1324,9 @@ function spawnGroup(g) {
   const m = TUNING.endless.spawnMargin
   const [L, T, R, B] = BB.on
     ? [BB.x0, BB.y0, BB.x1, BB.y1]
-    : AW > W
-    ? [Math.max(16, cam.x - m), Math.max(16, cam.y - m), Math.min(AW - 16, cam.x + W + m), Math.min(AH - 16, cam.y + H + m)]
+    : AW > BW
+    ? // The 1280×800 middle of the view, whatever the screen's shape, so a TV doesn't change the game.
+      [Math.max(16, cam.x + OX - m), Math.max(16, cam.y + OY - m), Math.min(AW - 16, cam.x + OX + BW + m), Math.min(AH - 16, cam.y + OY + BH + m)]
     : [16, 16, AW - 16, AH - 16]
   for (let i = 0; i < g.count; i++) {
     let x
@@ -3246,8 +3306,8 @@ function applyCard(c) {
   }
   recomputeSyn()
 }
-const draftCardRect = (i, n, sel = false) => ({ x: W / 2 - (n * 336 + (n - 1) * 36) / 2 + i * 372, y: 200 + (sel ? -14 : 0), w: 336, h: 420 })
-const DRAFT_BTN = { pick: { x: W / 2 - 474, y: 684, w: 300, h: 52 }, reroll: { x: W / 2 - 150, y: 684, w: 300, h: 52 }, banish: { x: W / 2 + 174, y: 684, w: 300, h: 52 } }
+const draftCardRect = (i, n, sel = false) => ({ x: BW / 2 - (n * 336 + (n - 1) * 36) / 2 + i * 372, y: 200 + (sel ? -14 : 0), w: 336, h: 420 })
+const DRAFT_BTN = { pick: { x: BW / 2 - 474, y: 684, w: 300, h: 52 }, reroll: { x: BW / 2 - 150, y: 684, w: 300, h: 52 }, banish: { x: BW / 2 + 174, y: 684, w: 300, h: 52 } }
 function updateDraft(dt) {
   const d = G.draft
   d.t += dt
@@ -3320,7 +3380,7 @@ function nextWave() {
   if (G.wave === 10) {
     G.sector++
     if (G.sector === 2) setFlag('sector2')
-    grid.force(W / 2, H / 2, 40, 900)
+    grid.force(cam.x + W / 2, cam.y + H / 2, 40, 900)
     startWave(1)
   } else startWave(G.wave + 1)
 }
@@ -3501,10 +3561,15 @@ watchTouch()
 /** A touch screen held upright: the game is drawn for landscape, so it asks to be turned. */
 const portrait = () => input.mode === 'touch' && innerHeight > innerWidth
 function drawTurnSideways() {
+  ui = false
   screenT()
   ctx.globalAlpha = 1
   ctx.fillStyle = '#000006'
   ctx.fillRect(0, 0, W, H)
+  inUi(drawTurnSidewaysText)
+}
+function drawTurnSidewaysText() {
+  const W = BW
   // A tablet outline turning on its side.
   const a = -Math.PI / 2 * clamp((Math.sin(clock * 2) + 1) / 2 * 1.4 - 0.2, 0, 1)
   ctx.save()
@@ -3529,6 +3594,10 @@ function update(dt) {
   canvas.style.cursor = screen === 'playing' && input.mode === 'mouse' ? 'none' : 'default'
   if (menuLock > 0) menuLock -= dt
   if (flash > 0) flash -= dt * 2
+  // Every screen but play is a menu laid out in the 1280×800 box: pointers move into it for the update.
+  const menuDx = screen === 'playing' ? 0 : OX
+  const menuDy = screen === 'playing' ? 0 : OY
+  shiftPointers(-menuDx, -menuDy)
   switch (screen) {
     case 'title':
       music.setIntensity(0)
@@ -3592,6 +3661,7 @@ function update(dt) {
       }
       break
   }
+  shiftPointers(menuDx, menuDy)
   grid.update(dt)
   updateFx(screen === 'playing' && G?.slowT > 0 ? dt * 0.35 : dt)
   for (const p of fingers.up) screenDowns.delete(p.id)
@@ -4126,7 +4196,7 @@ function drawHud() {
 
 /** The two-bar pause button (mouse and touch). */
 function drawPauseButton(r) {
-  panel(r.x, r.y, r.w, r.h, input.mode === 'mouse' && inside(input.pointer, r) ? '#ffffff' : '#55607a', 'rgba(8,10,22,0.7)', 2)
+  panel(r.x, r.y, r.w, r.h, input.mode === 'mouse' && inside(uiPointer(), r) ? '#ffffff' : '#55607a', 'rgba(8,10,22,0.7)', 2)
   ctx.fillStyle = '#ffffff'
   const cx = r.x + r.w / 2
   const cy = r.y + r.h / 2
@@ -4185,6 +4255,8 @@ function drawRadar() {
 }
 
 function drawBanner() {
+  const W = BW
+  const H = BH
   const b = G?.banner
   if (!b) return
   screenT()
@@ -4195,10 +4267,15 @@ function drawBanner() {
   ctx.globalAlpha = 1
 }
 
+/** Darken the whole view (not just the menu box). */
 function dim(a = 0.65) {
+  const was = ui
+  ui = false
   screenT()
   ctx.fillStyle = `rgba(0,0,6,${a})`
   ctx.fillRect(0, 0, W, H)
+  ui = was
+  screenT()
 }
 
 function drawIcon(icon, x, y, color, t) {
@@ -4209,6 +4286,8 @@ function drawIcon(icon, x, y, color, t) {
 }
 
 function drawDraft() {
+  const W = BW
+  const H = BH
   const d = G.draft
   dim(0.7)
   glowText(d.supply ? 'SUPPLY DROP' : 'CHOOSE AN UPGRADE', W / 2, 120, 50, d.supply ? '#d8ff3a' : sector().accent)
@@ -4285,6 +4364,8 @@ function buildSummary() {
 }
 
 function drawPause() {
+  const W = BW
+  const H = BH
   dim(0.7)
   glowText('PAUSED', W / 2, 190, 72, sector().accent)
   pauseMenu.draw(ctx, menuFont(28))
@@ -4299,6 +4380,8 @@ function drawPause() {
 }
 
 function drawOver() {
+  const W = BW
+  const H = BH
   dim(0.75)
   const win = G.win
   glowText(win ? 'VICTORY' : 'SIGNAL LOST', W / 2, 170, 80, win ? '#ffe866' : '#ff4040')
@@ -4322,6 +4405,8 @@ function drawOver() {
 }
 
 function drawSettings() {
+  const W = BW
+  const H = BH
   dim(0.82)
   settingsScreen.draw(ctx, { font: menuFont(24), titleFont: `400 48px ${LOGO}`, color: '#3fd8ff' })
   const desc = SETTINGS_DESC[settingsScreen.menu.selected?.id]?.() ?? ''
@@ -4336,6 +4421,13 @@ function drawTitle(t) {
   ctx.fillStyle = 'rgba(0,0,8,0.5)'
   ctx.fillRect(0, 0, W, H)
   if (screen !== 'title') return
+  inUi(drawTitleMenu)
+}
+/** The title's text, menu and ship carousel, in the 1280×800 box. */
+function drawTitleMenu() {
+  const W = BW
+  const H = BH
+  const t = clock
   glowText('NEON', W / 2, 150, 104, '#3fd8ff')
   glowText('SWARM', W / 2, 256, 104, '#ff5ce1')
 
@@ -4400,6 +4492,8 @@ function drawTitle(t) {
 }
 
 function drawHowTo() {
+  const W = BW
+  const H = BH
   dim(0.82)
   glowText('HOW TO PLAY', W / 2, 112, 56, '#3fd8ff')
   const rows = [
@@ -4432,8 +4526,8 @@ function draw(dt) {
   drawBackground()
   if (screen === 'title' || !G) {
     drawTitle(clock)
-    if (screen === 'settings') drawSettings()
-    if (screen === 'howto') drawHowTo()
+    if (screen === 'settings') inUi(drawSettings)
+    if (screen === 'howto') inUi(drawHowTo)
   } else {
     drawWorld()
     drawParticles()
@@ -4441,12 +4535,13 @@ function draw(dt) {
     drawRadar()
     if (screen !== 'settings') drawHud()
     if (screen === 'playing') drawTouchSticks()
-    if (screen === 'playing') drawBanner()
-    if (screen === 'draft') drawDraft()
-    if (screen === 'paused') drawPause()
-    if (screen === 'gameover') drawOver()
-    if (screen === 'settings') drawSettings()
+    if (screen === 'playing') inUi(drawBanner)
+    if (screen === 'draft') inUi(drawDraft)
+    if (screen === 'paused') inUi(drawPause)
+    if (screen === 'gameover') inUi(drawOver)
+    if (screen === 'settings') inUi(drawSettings)
   }
+  ui = false
   if (flash > 0) {
     screenT()
     ctx.fillStyle = `rgba(255,255,255,${Math.min(0.6, flash)})`
@@ -4479,9 +4574,15 @@ function frame(now) {
 requestAnimationFrame(frame)
 
 window.__game = {
-  // Where the on-screen pause button is, so the check can click it when playing with only a mouse.
+  // The drawing space: w×h fills the screen (1280×800 on the Deck, wider on a TV, taller on a 4:3
+  // tablet); menus sit in a 1280×800 box at x, y inside it.
+  get view() {
+    return { w: W, h: H, x: OX, y: OY }
+  },
+  // Where the on-screen pause button is (view coordinates), so the check can click it when playing with only a mouse.
   pauseButton: PAUSE_BTN,
-  // Touch buttons, for touch tests: Endless UPGRADE (shown with an upgrade banked) and the draft's pause.
+  // Touch buttons, for touch tests: Endless UPGRADE (view coordinates, shown with an upgrade banked) and
+  // the draft's pause (menu-box coordinates: add view.x, view.y).
   upgradeButton: UPGRADE_BTN,
   draftPauseButton: DRAFT_PAUSE_BTN,
   // Where the touch sticks rest, and the sticks under a thumb right now ({ x, y, side }).
@@ -4521,6 +4622,10 @@ if (location.search.includes('debug')) {
     spawnEnemy,
     damage,
     BB,
+    bossBox: G_bossBox,
+    get titleShip() {
+      return titleShip
+    },
     save,
     cam
   }
