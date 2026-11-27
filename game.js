@@ -6,6 +6,7 @@ import { createAudio } from './audio.js'
 import { createSave, createSettings } from './save.js'
 import { createSettingsScreen } from './settings.js'
 import { drawPrompts } from './prompts.js'
+import { connectPhones } from './phone-pads.js'
 import { sfx, music, initSfx } from './sfx.js'
 import { Grid } from './grid.js'
 import { WEAPONS, PASSIVES, STATS, MODS, SHIPS, RARITY, MAX_LVL, FAMILIES, FAMILY_TIERS } from './data.js'
@@ -686,17 +687,18 @@ const SECTORS = [
 ]
 const BOSS_NAMES = ['HEXACORE', 'THE SERPENT', 'THE EYE']
 
-let screen = 'title' // title | howto | playing | paused | settings | draft | gameover
+let screen = 'title' // title | howto | phones | playing | paused | settings | draft | gameover
 let G = null
 let menuLock = 0
 let titleShip = Math.max(0, SHIPS.findIndex((s) => s.id === save.shipId))
 let pauseFrom = 'playing' // where Resume goes back to (playing or draft)
 let settingsFrom = 'title'
+let phonesFrom = 'title' // where Back goes from Connect a phone (title or paused)
 let flash = 0
 // The draft is part of a run and How to Play part of the title, so the outside world sees them as such.
 const state = {
   get screen() {
-    return screen === 'draft' ? 'playing' : screen === 'howto' ? 'title' : screen
+    return screen === 'draft' ? 'playing' : screen === 'howto' ? 'title' : screen === 'phones' ? phonesFrom : screen
   }
 }
 // Title menu (menu.js, drawn in the game's own style in drawTitle). Remembers the last mode you played.
@@ -705,9 +707,10 @@ const titleMenu = createMenu(
     { id: 'campaign', label: 'CAMPAIGN' },
     { id: 'endless', label: 'ENDLESS' },
     { id: 'howto', label: 'HOW TO PLAY' },
+    { id: 'phones', label: 'CONNECT A PHONE' },
     { id: 'settings', label: 'SETTINGS' }
   ],
-  { x: 140 + 230, y: 320, width: 460, height: 62, gap: 14 }
+  { x: 140 + 230, y: 316, width: 460, height: 56, gap: 10 }
 )
 titleMenu.select(save.endless ? 'endless' : 'campaign')
 const titleSel = () => titleMenu.items.indexOf(titleMenu.selected)
@@ -715,11 +718,42 @@ const pauseMenu = createMenu(
   [
     { id: 'resume', label: 'Resume' },
     { id: 'restart', label: 'Restart' },
+    { id: 'phones', label: 'Connect a phone' },
     { id: 'settings', label: 'Settings' },
     { id: 'title', label: 'Quit to title' }
   ],
-  { x: BW / 2 - 220, y: 290, width: 360, height: 60, gap: 16, accent: '#3fd8ff', idle: 'rgba(8,10,22,0.9)' }
+  { x: BW / 2 - 220, y: 270, width: 360, height: 56, gap: 12, accent: '#3fd8ff', idle: 'rgba(8,10,22,0.9)' }
 )
+// Endless: open a banked upgrade from the pause menu. A phone's twin sticks have no Y, so this is
+// how a phone player gets to them (anyone else can use it too). Only in the menu while one is banked.
+const PAUSE_UPGRADE = { id: 'upgrade', label: 'Upgrade' }
+function syncPauseUpgrade() {
+  const items = pauseMenu.items
+  const at = items.indexOf(PAUSE_UPGRADE)
+  const want = !!(G?.endless && G.pending > 0 && G.P.alive && pauseFrom === 'playing')
+  if (want) PAUSE_UPGRADE.label = `Upgrade${G.pending > 1 ? ` ×${G.pending}` : ''}`
+  if (want && at < 0) items.splice(1, 0, PAUSE_UPGRADE)
+  else if (!want && at >= 0) items.splice(at, 1)
+}
+
+// Phones as controllers (phone-pads.js): "Connect a phone" shows a QR code; the phone that joins is
+// one more pad in input.pads, so everything below reads it like a controller. In play it's two
+// sticks (move, aim and fire) with the ship's power on LT and the bomb on RT; on every other screen
+// it's a stick and A B X Y, for the menus and the draft. Nothing opens a room until the card shows.
+const PHONE_THEME = { accent: '#3fd8ff', bg: '#02030d', fg: '#eef0f5', button: '#141a2e', font: 'condensed', radius: 50 }
+const PHONE_PLAY = { layout: 'twin', labels: { lt: 'Power', rt: 'Bomb' }, theme: PHONE_THEME }
+const PHONE_MENU = { layout: 'classic', labels: { a: 'OK', b: 'Back', x: 'Banish', y: 'Reroll' }, theme: PHONE_THEME }
+const phones = connectPhones(input, { controls: PHONE_MENU, max: 1 })
+let phoneLayout = PHONE_MENU
+/** Twin sticks during play, the menu pad everywhere else; only sent when it changes. */
+function syncPhoneLayout() {
+  const want = screen === 'playing' ? PHONE_PLAY : PHONE_MENU
+  if (want === phoneLayout) return
+  phoneLayout = want
+  phones.controls(want)
+}
+/** A phone is connected and is what's being played with (its pad reads as a gamepad). */
+const onPhone = () => phones.count > 0 && input.mode === 'gamepad'
 const overMenu = createMenu(
   [
     { id: 'again', label: 'RETRY' },
@@ -3424,6 +3458,7 @@ function openPause() {
   if (screen === 'playing' && !G?.P.alive) return
   pauseFrom = screen
   screen = 'paused'
+  syncPauseUpgrade()
   pauseMenu.select('resume')
   sfx.laser(false)
   if (G) G.laserOn = false
@@ -3432,6 +3467,12 @@ function openPause() {
 function openSettings(from) {
   settingsFrom = from
   screen = 'settings'
+  sfx.select()
+}
+function openPhones(from) {
+  phonesFrom = from
+  screen = 'phones'
+  menuLock = 0.2
   sfx.select()
 }
 function startRun(shipIdx, endless) {
@@ -3490,6 +3531,7 @@ function updateTitle(dt, decoOnly = false) {
     return sfx.select()
   }
   if (choice === 'settings') return openSettings('title')
+  if (choice === 'phones') return openPhones('title')
   const ship = SHIPS[titleShip]
   if (!unlocked(ship.unlock)) return sfx.deny()
   save.endless = choice === 'endless'
@@ -3621,7 +3663,13 @@ function update(dt) {
         recordRun()
         sfx.select()
         startRun(G.shipIdx, G.endless)
-      } else if (choice === 'settings') openSettings('paused')
+      } else if (choice === 'upgrade') {
+        G.pending--
+        G.drafted++
+        syncPauseUpgrade()
+        openDraft()
+      } else if (choice === 'phones') openPhones('paused')
+      else if (choice === 'settings') openSettings('paused')
       else if (choice === 'title') {
         recordRun()
         sfx.select()
@@ -3652,6 +3700,15 @@ function update(dt) {
         sfx.select()
       }
       break
+    case 'phones':
+      if (phonesFrom === 'title') updateTitle(dt, true)
+      // Back (B, Esc, the pause button or a tap) returns; A does too once a phone is in.
+      if (menuLock <= 0 && (input.pressed('b') || input.pressed('menu') || input.pointer.released || (phones.count > 0 && input.pressed('a')))) {
+        screen = phonesFrom
+        menuLock = 0.2
+        sfx.select()
+      }
+      break
     case 'howto':
       updateTitle(dt, true)
       if (menuLock <= 0 && (input.pressed('a') || input.pressed('b') || input.pressed('menu') || input.pointer.released)) {
@@ -3662,6 +3719,7 @@ function update(dt) {
       break
   }
   shiftPointers(menuDx, menuDy)
+  syncPhoneLayout()
   grid.update(dt)
   updateFx(screen === 'playing' && G?.slowT > 0 ? dt * 0.35 : dt)
   for (const p of fingers.up) screenDowns.delete(p.id)
@@ -4112,7 +4170,7 @@ function drawHud() {
       button(UPGRADE_BTN, `UPGRADE ×${G.pending}`, '#d8ff3a')
     } else if (G.pending > 0 && !touchy()) {
       ctx.globalAlpha = 0.7 + Math.sin(clock * 6) * 0.3
-      text(`${input.label('y')}  UPGRADE${G.pending > 1 ? ` ×${G.pending}` : ''}`, x + bw + 14, 88, 24, '#d8ff3a', 'left')
+      text(`${onPhone() ? 'PAUSE ›' : input.label('y')}  UPGRADE${G.pending > 1 ? ` ×${G.pending}` : ''}`, x + bw + 14, 88, 24, '#d8ff3a', 'left')
       ctx.globalAlpha = 1
     }
   } else text(isBoss ? `SECTOR ${G.sector}  ·  BOSS` : `SECTOR ${G.sector}  ·  WAVE ${G.wave}/10`, W / 2, 62, 24, sector().accent)
@@ -4438,8 +4496,8 @@ function drawTitleMenu() {
     const sel = it === titleMenu.selected
     const r = titleMenu.rect(i)
     panel(r.x, r.y, r.w, r.h, sel ? '#ffffff' : '#55607a', sel ? 'rgba(20,26,40,0.96)' : 'rgba(8,10,22,0.85)', sel ? 4 : 2)
-    text(it.label, r.x + 32, r.y + 42, 30, sel ? '#ffffff' : '#aab3cc', 'left')
-    if (sel) text('▶', r.x + r.w - 32, r.y + 42, 26, '#d8ff3a', 'right')
+    text(it.label, r.x + 32, r.y + r.h / 2 + 11, 30, sel ? '#ffffff' : '#aab3cc', 'left')
+    if (sel) text('▶', r.x + r.w - 32, r.y + r.h / 2 + 10, 26, '#d8ff3a', 'right')
   })
   const info = [
     [
@@ -4451,9 +4509,10 @@ function drawTitleMenu() {
       save.bestEndless > 0 ? `Best ${fmt(save.bestEndless)}  ·  longest ${mmss(save.bestTime)}` : ''
     ],
     ['Controls and the basics.', ''],
+    ['Play with your phone as a twin-stick pad. No app needed.', phones.count > 0 ? 'Phone connected' : ''],
     [`Difficulty, aiming help, volume and more.  Difficulty: ${TUNING.difficulty[cfg.diff].name}`, '']
   ][titleSel()]
-  let iy = 646
+  let iy = 664
   for (const l of wrap(info[0], mw, 24).slice(0, 2)) {
     text(l, mx, iy, 24, '#c8d0e8', 'left', 600)
     iy += 30
@@ -4517,6 +4576,34 @@ function drawHowTo() {
   else drawPrompts(ctx, input, [['b', 'Back']], { y: H - 48, size: 22 * cfg.textScale, font: `600 ${Math.round(22 * cfg.textScale)}px ${FONT}` })
 }
 
+function drawPhones() {
+  const W = BW
+  const H = BH
+  dim(0.85)
+  glowText('CONNECT A PHONE', W / 2, 100, 56, '#3fd8ff')
+  phones.drawCard(ctx, 130, 150, { size: 1, font: FONT, ink: '#eef0f5', quiet: '#aab3cc', accent: '#d8ff3a', panel: 'rgba(8,10,22,0.92)', title: 'Your phone is the pad' })
+  const x = 620
+  const rows = [
+    ['Left thumb', 'Move'],
+    ['Right thumb', 'Aim and fire'],
+    ['POWER', "Your ship's ability"],
+    ['BOMB', 'Clears the screen'],
+    ['Pause', 'Pause, and open banked upgrades']
+  ]
+  text('ON YOUR PHONE', x, 186, 26, '#ffffff', 'left')
+  rows.forEach(([k, v], i) => {
+    const y = 210 + i * 58
+    panel(x, y, 540, 50, '#55607a', 'rgba(8,10,22,0.9)')
+    text(k, x + 22, y + 34, 24, '#d8ff3a', 'left')
+    text(v, x + 518, y + 34, 24, '#ffffff', 'right', 600)
+  })
+  const note = 'Scan the code with the phone\'s camera: no app needed. Menus and the draft use its stick and A B X Y. Hold it sideways.'
+  wrap(note, 540, 22).forEach((l, i) => text(l, x, 540 + i * 30, 22, '#c8d0e8', 'left', 600))
+  if (phones.count > 0) text('Phone connected', x, 660, 28, '#3ddc84', 'left')
+  if (input.mode === 'touch') text('Tap anywhere to go back', W / 2, H - 40, 24, '#eef0f5', 'center', 600)
+  else drawPrompts(ctx, input, [['b', 'Back']], { y: H - 48, size: 22 * cfg.textScale, font: `600 ${Math.round(22 * cfg.textScale)}px ${FONT}` })
+}
+
 let clock = 0
 function draw(dt) {
   clock += dt
@@ -4528,6 +4615,7 @@ function draw(dt) {
     drawTitle(clock)
     if (screen === 'settings') inUi(drawSettings)
     if (screen === 'howto') inUi(drawHowTo)
+    if (screen === 'phones') inUi(drawPhones)
   } else {
     drawWorld()
     drawParticles()
@@ -4540,6 +4628,7 @@ function draw(dt) {
     if (screen === 'paused') inUi(drawPause)
     if (screen === 'gameover') inUi(drawOver)
     if (screen === 'settings') inUi(drawSettings)
+    if (screen === 'phones') inUi(drawPhones)
   }
   ui = false
   if (flash > 0) {
@@ -4627,6 +4716,11 @@ if (location.search.includes('debug')) {
       return titleShip
     },
     save,
-    cam
+    cam,
+    pauseMenu,
+    phones,
+    get phoneLayout() {
+      return phoneLayout.layout
+    }
   }
 }

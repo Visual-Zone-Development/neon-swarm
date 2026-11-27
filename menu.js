@@ -1,4 +1,4 @@
-// pushplay runtime v3 — replaced by `npm run update-kit`; don't edit, extend from game.js.
+// pushplay runtime v20 — replaced by `update-runtime`; don't edit, extend from game.js.
 //
 // A vertical menu that works the same with a controller, a keyboard, a mouse and touch:
 //   d-pad / stick / arrows / WASD move, A / Space / Enter choose, B / Backspace / right-click
@@ -30,11 +30,15 @@ export const QUIT_TO_LIBRARY = 'quit-to-library'
  */
 export function createMenu(items, options = {}) {
   const o = { x: 640, y: 420, width: 420, height: 64, gap: 14, wrap: true, accent: '#ffb547', text: '#eef0f5', idle: 'rgba(255,255,255,0.08)', ...options }
+  /** How far Quit to library moved the menu up, kept when the game moves it with place(). */
+  let lift = 0
   const launcher = globalThis.pushplay
-  if ((o.quitToLibrary ?? items.some((i) => i.id === 'resume')) && typeof launcher?.quit === 'function') {
+  // Pause menus (they have 'resume') and title menus (they have 'play') get it unless told otherwise.
+  if ((o.quitToLibrary ?? items.some((i) => i.id === 'resume' || i.id === 'play')) && typeof launcher?.quit === 'function') {
     items.push({ id: QUIT_TO_LIBRARY, label: 'Quit to library' })
     // Half a row higher, so the longer menu stays centred where the game put it.
-    o.y -= (o.height + o.gap) / 2
+    lift = (o.height + o.gap) / 2
+    o.y -= lift
   }
   /** Quit to library goes straight to the launcher. */
   const choose = (id) => {
@@ -93,6 +97,14 @@ export function createMenu(items, options = {}) {
     },
     value(id) {
       return items.find((it) => it.id === id)?.value
+    },
+    /**
+     * Move the menu: its centre x and first row's y, as in the options. For a game drawn with
+     * fitCanvas's fill, call it from fit.onResize so menus stay centred on fit.w / fit.h.
+     */
+    place({ x = o.x, y = o.y + lift } = {}) {
+      o.x = x
+      o.y = y - lift
     },
     rect,
     display,

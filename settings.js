@@ -1,4 +1,4 @@
-// pushplay runtime v2 — replaced by `npm run update-kit`; don't edit, extend from game.js.
+// pushplay runtime v20 — replaced by `update-runtime`; don't edit, extend from game.js.
 //
 // A ready-made settings screen (master / music / SFX volume, reduced screen shake, text size)
 // built on menu.js, so it works with every input. Reachable from the title and the pause menu.
@@ -61,6 +61,12 @@ export function createSettingsScreen({ settings, audio, extra = [], title = 'Set
 
   return {
     menu,
+    /** Move the screen (its centre x and first row's y), e.g. from fit.onResize on a filled screen. */
+    place(at = {}) {
+      x = at.x ?? x
+      y = at.y ?? y
+      menu.place({ x, y })
+    },
     /** Returns 'back' when the player leaves (settings are saved then), an extra action's id, or null. */
     update(input, dt) {
       const choice = menu.update(input, dt)
