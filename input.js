@@ -1,4 +1,4 @@
-// pushplay runtime v2 — replaced by `npm run update-kit`; don't edit, extend from game.js.
+// pushplay runtime v23 — replaced by `update-runtime`; don't edit, extend from game.js.
 //
 // Controller, keyboard, mouse and touch input behind one API. Games run on handhelds and on
 // Linux, Windows and Mac PCs, so every action has to work with each of them.
@@ -19,8 +19,14 @@
 // input.mode is 'gamepad' | 'keyboard' | 'mouse' | 'touch' (whatever the player used last), so
 // prompts can say the right thing: input.label('a'), input.stickLabel(), input.dpadLabel().
 // input.pads[i] has per-pad state for local multiplayer; the merged view above is the default.
+// input.addPad(read) adds a pad that code feeds instead of the Gamepad API (a phone, through
+// phone-pads.js): read() returns { connected, x, y, aimX, aimY, held } each update, and the pad joins
+// input.pads and the merged view like a controller. input.onUpdate(fn) runs fn(dt) first in update().
 // input.onPause(cb) fires when the launcher opens its overlay, the window loses focus or is
-// hidden, or every controller disconnects: pause the game there.
+// hidden (a phone's screen locks, the app goes to the background), or every controller
+// disconnects: pause the game there.
+// input.inject({ x, y, buttons }) feeds this frame from on-screen controls (touch.js does this
+// for its virtual stick and buttons); call it after input.update().
 
 const BUTTONS = ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'select', 'start', 'ls', 'rs', 'up', 'down', 'left', 'right']
 const DEFAULT_KEYS = {
@@ -127,12 +133,13 @@ function step(axis, dir, dt) {
   return dir
 }
 
-/** Per-controller state, kept across frames so pressed() works per pad. */
-function makePad(index) {
+/** Per-controller state, kept across frames so pressed() works per pad. read: a pad code feeds (addPad). */
+function makePad(index, read = null) {
   let padNow = new Set()
   let padBefore = new Set()
   return {
     index,
+    virtual: Boolean(read),
     connected: false,
     x: 0,
     y: 0,
@@ -163,9 +170,25 @@ function makePad(index) {
         this.aimY = ry
       }
       return padNow
+    },
+    /** @internal A pad code feeds: its state this frame, from read(). */
+    _feed() {
+      padBefore = padNow
+      padNow = new Set()
+      const s = read() ?? {}
+      this.connected = Boolean(s.connected)
+      this.x = this.y = this.aimX = this.aimY = 0
+      if (!this.connected) return padNow
+      for (const b of s.held ?? []) if (BUTTONS.includes(b) || b === 'menu') padNow.add(b)
+      if (padNow.has('start')) padNow.add('menu')
+      const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0)
+      // No dead zone here: the feeder has its own (a phone's stick does; a slider must reach 0.05).
+      ;[this.x, this.y, this.aimX, this.aimY] = [n(s.x), n(s.y), n(s.aimX), n(s.aimY)]
+      return padNow
     }
   }
 }
+const updateListeners = new Set()
 
 function initialMode() {
   const api = launcher()
@@ -207,6 +230,14 @@ export const input = {
   pointer: { x: 0, y: 0, down: false, pressed: false, released: false, active: false, type: 'mouse' },
   /** Every pointer currently touching or hovering, by pointerId: { id, x, y, down, type }. */
   pointers: new Map(),
+  /**
+   * The drawing space attach() was given (touch.js lays its controls out in it), and the canvas.
+   * With fitCanvas({ fill: true }) it is the fit's live size, which follows the screen.
+   */
+  get space() {
+    return liveSpace()
+  },
+  canvas: null,
 
   /**
    * Track the mouse and touch, converted into a w×h drawing space (1280×800 unless the game
@@ -216,12 +247,14 @@ export const input = {
     attached.canvas = canvas
     attached.w = w
     attached.h = h
+    this.canvas = canvas
     if (attached.listening) return
     attached.listening = true
     const place = (e, p) => {
       const r = attached.canvas.getBoundingClientRect()
-      p.x = ((e.clientX - r.left) / (r.width || 1)) * attached.w
-      p.y = ((e.clientY - r.top) / (r.height || 1)) * attached.h
+      const space = liveSpace()
+      p.x = ((e.clientX - r.left) / (r.width || 1)) * space.w
+      p.y = ((e.clientY - r.top) / (r.height || 1)) * space.h
       p.type = e.pointerType || 'mouse'
     }
     const track = (e) => {
@@ -283,6 +316,7 @@ export const input = {
     if (dt === undefined) dt = lastUpdate ? Math.min(0.1, (t - lastUpdate) / 1000) : 1 / 60
     lastUpdate = t
 
+    for (const fn of updateListeners) fn(dt)
     before = now
     now = new Set(tapped)
     tapped.clear()
@@ -299,10 +333,10 @@ export const input = {
     let connected = 0
     const pads = navigator.getGamepads?.() ?? []
     for (const state of this.pads) {
-      const pad = pads[state.index]
-      const usable = pad && pad.connected !== false && (pad.mapping === 'standard' || pad.mapping === '')
-      const buttons = state._read(usable ? pad : null)
-      if (!usable) continue
+      const pad = state.virtual ? null : pads[state.index]
+      const usable = state.virtual || (pad && pad.connected !== false && (pad.mapping === 'standard' || pad.mapping === ''))
+      const buttons = state.virtual ? state._feed() : state._read(usable ? pad : null)
+      if (!usable || (state.virtual && !state.connected)) continue
       connected++
       if (buttons.size) this.mode = 'gamepad'
       for (const b of buttons) now.add(b)
@@ -345,6 +379,25 @@ export const input = {
   pressed: (button) => now.has(button) && !before.has(button),
   released: (button) => !now.has(button) && before.has(button),
 
+  /**
+   * On-screen controls (touch.js): add a stick vector and held buttons to this frame, after
+   * update(). The stick adds to x/y (clamped to the unit circle); buttons join held/pressed/
+   * released like any other, so a game reads them the same way whatever the player holds.
+   */
+  inject({ x = 0, y = 0, buttons = [] } = {}) {
+    if (x || y) {
+      const sx = this.x + x
+      const sy = this.y + y
+      const len = Math.hypot(sx, sy)
+      this.x = len > 1 ? sx / len : sx
+      this.y = len > 1 ? sy / len : sy
+    }
+    for (const b of buttons) {
+      if (!now.has(b) && !before.has(b)) for (const cb of pressListeners) cb(b)
+      now.add(b)
+    }
+  },
+
   /** The game's own on-screen pause button was tapped: counts as one press of `menu`. */
   requestMenu() {
     menuRequested = true
@@ -366,6 +419,30 @@ export const input = {
     return DPAD_LABELS[this.mode] ?? DPAD_LABELS.keyboard
   },
 
+  /**
+   * A pad fed by code rather than the Gamepad API (phone-pads.js adds one per phone). read() returns
+   * { connected, x, y, aimX, aimY, held: ['a', …] } and is called once per update(); the pad is in
+   * input.pads (local multiplayer) and in the merged input.x / held() like any controller.
+   */
+  addPad(read) {
+    const pad = makePad(this.pads.length, read)
+    this.pads.push(pad)
+    return pad
+  },
+  removePad(pad) {
+    const i = this.pads.indexOf(pad)
+    if (i >= 0 && pad.virtual) this.pads.splice(i, 1)
+  },
+  /** A controller the game was using went away (a phone locked or lost Wi-Fi): fires onPause. */
+  padLost() {
+    firePause()
+  },
+  /** fn(dt) runs at the start of every update(), before any device is read. */
+  onUpdate(fn) {
+    updateListeners.add(fn)
+    return () => updateListeners.delete(fn)
+  },
+
   /** Pause the game when this fires (launcher overlay, window hidden or unfocused, pads gone). */
   onPause(cb) {
     pauseListeners.add(cb)
@@ -384,6 +461,12 @@ export const input = {
 }
 
 const attached = { canvas: null, w: 1280, h: 800, listening: false }
+
+/** attach()'s space, or the fit's current size when the canvas fills the screen (fit.js fill). */
+function liveSpace() {
+  const fit = attached.canvas?.__fit
+  return fit?.fill ? { w: fit.w, h: fit.h } : { w: attached.w, h: attached.h }
+}
 let pointerDown = false
 // Went down / came up since the last update: a quick click or tap can do both between frames.
 let pointerWentDown = false
@@ -407,6 +490,10 @@ addEventListener('blur', () => {
 })
 addEventListener('focus', fireResume)
 document.addEventListener('visibilitychange', () => (document.hidden ? queueWindowPause() : fireResume()))
+// Phones: the screen locks or the app is sent to the background. Most browsers fire
+// visibilitychange too; these are the ones that don't, or that fire first.
+addEventListener('pagehide', queueWindowPause)
+document.addEventListener('freeze', queueWindowPause)
 
 // The launcher's overlay (pause menu) and its events, when running inside it.
 const api = launcher()
